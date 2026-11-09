@@ -18,8 +18,8 @@ width tables and another real fonts. Painting goes through `ViewPainter`, input 
 |---|---|
 | `src/state.ab` | `State<T>`: a value whose changes move a global revision (an app re-renders), queue the render scopes that read it (a component re-renders alone) and count its own version (a game polls one value). |
 | `src/flex.ab` | Flex layout: rows, columns and stacks; gap, padding, align, justify, grow, shrink, wrap, min/max, scrolling axes, anchored absolute children. Each node caches its last layout and measurement; setters mark only real changes; a fixed-size node bounds a relayout to its own subtree. |
-| `src/text.ab` | Line breaking over any font (`TextFont`): spaces, long words, newlines, max lines. |
-| `src/style.ab` | Styles as ordered (condition, property, value) entries, the last match winning: interaction states (hover, pressed, focused, selected, disabled) and viewport breakpoints (`upTo`, `from`). Resolved paint (`Look`) and the theme (`Theme`). |
+| `src/text.ab` | Line breaking over any font (`TextFont`): spaces, long words, newlines, max lines with an ellipsis. `TableFont`: a font from per-weight advance tables, for measuring with no renderer (a server laying out HTML). |
+| `src/style.ab` | Styles as ordered (condition, property, value) entries, the last match winning: interaction states (hover, pressed, focused, selected, disabled) and viewport breakpoints (`upTo`, `from`); raw (name, value) entries a backend passes through untouched (`raw("css:color", "red")`). Resolved paint (`Look`) and the theme (`Theme`, with named styles and named scopes; `withTheme` builds a subtree with another). |
 | `src/tree.ab` | The retained tree: elements (`El`) from components' `render()`, reconciled by key into nodes that keep their layout, look and wrapped text; per-node change records (added, removed, moved, properties); the paint walk onto a `ViewPainter`; per-frame changes without a render (`setText`, `setTranslate`, `setOpacity`, `setValue`). |
 | `src/input.ab` | Input over the tree: hit testing, hover and press, sliders, focus navigation (Tab, arrows, Enter / Space, the pad), scrolling (wheel, drag), Escape closing the topmost window, tooltips. |
 | `src/kit.ab` | Window, panel, button, toggle, slider, tabs, label, caption, list, list row, tooltip, built from elements and the theme. |
@@ -103,10 +103,19 @@ without any render.
 State holds plain values (numbers, booleans, strings). Keep a collection beside a State
 that counts its changes, and bump it after each edit.
 
+## Order is deterministic
+
+Whatever a backend reads (a node's children, its style entries, raw entries, change records,
+paint calls) comes out in program order: the order things were written, declared or
+reconciled. Nothing a backend reads iterates a Map or depends on an address or a hash; the
+tree's one Map (names, for `named`) and the theme's (named styles and scopes) are only
+looked up. `tests/style_test.ab` builds the same tree twice and checks the paint calls and
+change records match call for call.
+
 ## Checks
 
 `scripts/test.sh` builds and runs every `tests/*_test.ab` natively (`ABLAC` picks the
-compiler).
+compiler). It builds with ablac 0.2.48 and newer.
 
 ## Adopting it in abla-one
 

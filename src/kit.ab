@@ -25,6 +25,15 @@ fun ViewTree.useTheme(t: Theme): void {
     return
 }
 
+/** Build a subtree with theme `t`: the kit's elements made inside `build` use it. */
+fun withTheme(t: Theme, build: () -> El): El {
+    val outer = kitTheme
+    kitTheme = t
+    val el = build()
+    kitTheme = outer
+    el
+}
+
 /** Plain text in the theme's label style. */
 fun label(t: string, s: Style): El = text(t, kitTheme.label.with(s))
 

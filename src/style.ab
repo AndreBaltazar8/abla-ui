@@ -81,6 +81,7 @@ val P_FX = 58           // the shadow's or outline's colour
 val P_FX_A = 59
 val P_SOLID = 60        // 1: takes the pointer (a panel), so clicks don't reach the world
 val P_COUNT = 61
+val P_RAW = 100         // a raw (name, value) pair for one backend, e.g. "css:…"; its value indexes `raw`
 
 val SIZE_CONTENT = -1.0
 val SIZE_FILL = -2.0
@@ -106,8 +107,14 @@ val ON_DISABLED = 16
 val ON_UP_TO = 100000   // + the width
 val ON_FROM = 200000    // + the width
 
-/** Entries, three numbers each: condition, property, value. Builders return a new Style. */
-class Style(val e: array<f64>)
+/**
+ * Entries, three numbers each: condition, property, value, in the order they were written
+ * (that order is kept by every builder: a backend that serializes a style reads it as
+ * declared). Raw entries (P_RAW) carry a name and a text value in `raw` (two strings each)
+ * that layout and painting ignore and a backend passes through, e.g. abla-one's
+ * `css:` declarations. Builders return a new Style.
+ */
+class Style(val e: array<f64>, val raw: array<string> = [])
 
 fun style(): Style = Style([])
 
@@ -119,32 +126,71 @@ fun Style.setOn(cond: int, prop: int, value: f64): Style {
     out.append(f64FromInt(cond))
     out.append(f64FromInt(prop))
     out.append(value)
-    Style(out)
+    val raw: array<string> = []
+    for (r in this.raw) raw.append(r)
+    Style(out, raw)
+}
+
+/** A raw (name, value) entry a backend passes through untouched (`css:color`, "red"). */
+fun Style.rawOn(cond: int, name: string, value: string): Style {
+    val out: array<f64> = []
+    for (v in this.e) out.append(v)
+    val raw: array<string> = []
+    for (r in this.raw) raw.append(r)
+    out.append(f64FromInt(cond))
+    out.append(f64FromInt(P_RAW))
+    out.append(f64FromInt(raw.size / 2))
+    raw.append(name)
+    raw.append(value)
+    Style(out, raw)
+}
+
+fun Style.raw(name: string, value: string): Style = this.rawOn(ON_ALWAYS, name, value)
+
+/** The raw entries that hold for `states` at `width`, in the order they were written. */
+fun Style.rawEntries(states: int, width: f64, var names: array<string>, var values: array<string>): void {
+    names.clear()
+    values.clear()
+    var i = 0
+    while (i < this.e.size) {
+        if (f64ToInt(this.e[i + 1]) == P_RAW && styleMatches(f64ToInt(this.e[i]), states, width)) {
+            val k = f64ToInt(this.e[i + 2]) * 2
+            names.append(this.raw[k])
+            values.append(this.raw[k + 1])
+        }
+        i = i + 3
+    }
+    return
 }
 
 /** This style, then `other`'s entries (which win). */
-fun Style.with(other: Style): Style {
-    val out: array<f64> = []
-    for (v in this.e) out.append(v)
-    for (v in other.e) out.append(v)
-    Style(out)
-}
+fun Style.with(other: Style): Style = this.merged(other, ON_ALWAYS, false)
 
-/** `other`'s entries apply only in `cond` (states combine with any condition already there). */
-fun Style.on(cond: int, other: Style): Style {
+/** `other`'s entries appended, their raw pairs renumbered; scoped to `cond` when `scoped`. */
+fun Style.merged(other: Style, cond: int, scoped: bool): Style {
     val out: array<f64> = []
     for (v in this.e) out.append(v)
+    val raw: array<string> = []
+    for (r in this.raw) raw.append(r)
+    val shift = f64FromInt(raw.size / 2)
+    for (r in other.raw) raw.append(r)
     var i = 0
     while (i < other.e.size) {
         val inner = f64ToInt(other.e[i])
-        val combined = if (inner == ON_ALWAYS) cond else if (cond < ON_UP_TO && inner < ON_UP_TO) cond | inner else cond
-        out.append(f64FromInt(combined))
+        val c = if (!scoped) inner
+            else if (inner == ON_ALWAYS) cond
+            else if (cond < ON_UP_TO && inner < ON_UP_TO) cond | inner
+            else cond
+        out.append(f64FromInt(c))
         out.append(other.e[i + 1])
-        out.append(other.e[i + 2])
+        out.append(if (f64ToInt(other.e[i + 1]) == P_RAW) other.e[i + 2] + shift else other.e[i + 2])
         i = i + 3
     }
-    Style(out)
+    Style(out, raw)
 }
+
+/** `other`'s entries apply only in `cond` (states combine with any condition already there). */
+fun Style.on(cond: int, other: Style): Style = this.merged(other, cond, true)
 
 fun Style.hover(other: Style): Style = this.on(ON_HOVER, other)
 fun Style.pressed(other: Style): Style = this.on(ON_PRESSED, other)
@@ -155,8 +201,9 @@ fun Style.upTo(width: f64, other: Style): Style = this.on(ON_UP_TO + f64ToInt(wi
 fun Style.from(width: f64, other: Style): Style = this.on(ON_FROM + f64ToInt(width), other)
 
 fun Style.same(other: Style): bool {
-    if (this.e.size != other.e.size) return false
+    if (this.e.size != other.e.size || this.raw.size != other.raw.size) return false
     for (i in 0 until this.e.size) if (this.e[i] != other.e[i]) return false
+    for (i in 0 until this.raw.size) if (this.raw[i] != other.raw[i]) return false
     true
 }
 
@@ -390,8 +437,30 @@ class Theme(
     var tooltip: Style,     // a tooltip's box (and text)
     var thumb: Style,       // a scrollbar's thumb, with hover and pressed states
     var label: Style,       // plain text
-    var caption: Style      // muted, smaller text
+    var caption: Style,     // muted, smaller text
+    // A program's own named styles (kinds: "card", "chip", "Button.primary"…) and named
+    // scopes: other themes for subtrees. Looked up by name, never iterated.
+    val named: Map<string, Style> = Map(),
+    val scopes: Map<string, Theme> = Map()
 )
+
+/** Name a style in this theme (a kind, a part, a variant). */
+fun Theme.define(name: string, s: Style): void {
+    this.named.set(name, s)
+    return
+}
+
+/** A named style, or an empty one. */
+fun Theme.style(name: string): Style = this.named.get(name) ?? style()
+
+/** Name another theme for subtrees (`withTheme(theme.scope("dark"), …)`). */
+fun Theme.addScope(name: string, t: Theme): void {
+    this.scopes.set(name, t)
+    return
+}
+
+/** A named scope, or this theme when there is none by that name. */
+fun Theme.scope(name: string): borrow(this) Theme = this.scopes.get(name) ?? this
 
 fun themeDefault(): Theme {
     val text = 0xeef2f6

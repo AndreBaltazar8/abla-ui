@@ -1,0 +1,160 @@
+// Self-checks for styles (raw entries, order), themes (named styles, scopes), width-table
+// fonts and ellipsis, and determinism: the same tree built twice gives the same change
+// records and the same paint, call for call. Exits 0 when every check passes.
+
+import "abla/io"
+import "abla/float"
+import "abla/float/text"
+import "abla/math"
+import "../src/ui.ab"
+
+var failed = 0
+var passed = 0
+
+fun check(ok: bool, name: string): void {
+    if (ok) passed = passed + 1
+    else {
+        println("FAIL $name")
+        failed = failed + 1
+    }
+    return
+}
+
+fun near(a: f64, b: f64): bool = fabs(a - b) < 0.001
+
+fun rawAndOrder(): void {
+    val a = style().padding(4.0).raw("css:color", "red").raw("css:display", "grid")
+    val b = style().raw("css:gap", "1px").hover(style().raw("css:color", "blue"))
+    val c = a.with(b)
+    val names: array<string> = []
+    val values: array<string> = []
+    c.rawEntries(0, 800.0, names, values)
+    check(names.size == 3 && names[0] == "css:color" && names[1] == "css:display" && names[2] == "css:gap" && values[2] == "1px", "raw entries come out in the order written, across with()")
+    c.rawEntries(ON_HOVER, 800.0, names, values)
+    check(names.size == 4 && names[3] == "css:color" && values[3] == "blue", "a state-scoped raw entry joins in its state, after the others")
+    check(near(c.get(P_PAD_T, 0, 800.0, 0.0), 4.0), "typed entries sit beside raw ones")
+    val l = look()
+    lookResolve(c, ON_HOVER, 800.0, 0, 1.0, l)
+    check(l.fillA == 0.0, "raw entries don't paint")
+    check(c.same(a.with(b)) && !c.same(a), "same() compares raw entries too")
+    return
+}
+
+fun themes(): void {
+    val t = themeDefault()
+    t.define("card", style().padding(12.0))
+    check(near(t.style("card").get(P_PAD_L, 0, 800.0, 0.0), 12.0) && t.style("missing").e.size == 0, "named styles, empty when missing")
+    val dark = themeDefault()
+    dark.text = 0x112233
+    t.addScope("dark", dark)
+    check(t.scope("dark").text == 0x112233 && t.scope("nope").text == t.text, "scopes by name, the theme itself when missing")
+    val outside = label("a", style())
+    val inside = withTheme(dark, { -> panel(style(), [label("b", style())]) })
+    check(kitTheme.text != 0x112233, "withTheme restores the theme after the subtree")
+    check(inside.children.size == 1 && outside.kind == EL_TEXT, "a subtree built with another theme")
+    return
+}
+
+fun tables(): void {
+    // 'a' 500, 'b' 1000, space 250 per em at weight 400; bold doubles 'a'.
+    var f = tableFont([97, 98, 32], [400, 700], [[500, 1000, 250], [1000, 1000, 250]], 0.8, 0.2, 560, true)
+    val regular = f.face("Inter", 10.0, 400)
+    val bold = f.face("Inter", 10.0, 700)
+    check(near(f.width(regular, "ab", 0, 2), 15.0) && near(f.width(bold, "ab", 0, 2), 20.0), "widths from the weight's table")
+    check(near(f.width(regular, "a", 0, 1), 5.0) && near(f.width(regular, "z", 0, 1), 6.0), "an unlisted code point takes the fallback, rounded up")
+    check(near(f.width(regular, "😀", 0, 4), 10.0), "an unlisted symbol past U+2000 is one em")
+    check(near(f.lineHeight(regular), 10.0) && f.face("Inter", 10.0, 400) == regular, "line height, faces reused")
+
+    var lines = textLines()
+    textWrap("aaaa bbbb aaaa", regular, 45.0, 0, f, lines)
+    check(lines.starts.size == 3 && !lines.ellipsis, "wraps by the table's widths")
+    textWrap("aaaa bbbb aaaa", regular, 45.0, 1, f, lines)
+    check(lines.starts.size == 1 && lines.cut && lines.ellipsis && lines.widths[0] <= 45.0, "max lines cut, the last line ellipsized to fit (${lines.widths[0]})")
+    textWrap("aaaaaaaaaaaa", regular, 30.0, 1, f, lines)
+    check(lines.ellipsis && lines.ends[0] < 12 && lines.widths[0] <= 30.0, "one line too wide is ellipsized")
+    textWrap("aaaa", regular, 30.0, 1, f, lines)
+    check(!lines.ellipsis && lines.ends[0] == 4, "a line that fits isn't")
+    return
+}
+
+/** Records every paint call as text. */
+class Log(val calls: array<string>) : ViewPainter {
+    fun box(x: f64, y: f64, w: f64, h: f64, look: Look, opacity: f64): void {
+        calls.append("box $x $y $w $h ${look.fill} ${look.fillA} ${look.borderW} $opacity")
+        return
+    }
+    fun text(face: int, t: string, start: int, end: int, x: f64, y: f64, look: Look, opacity: f64): void {
+        calls.append("text $face ${t.slice(start, end)} $x $y ${look.color}")
+        return
+    }
+    fun image(handle: int, x: f64, y: f64, w: f64, h: f64, opacity: f64): void {
+        calls.append("image $handle $x $y $w $h")
+        return
+    }
+    fun clipPush(x: f64, y: f64, w: f64, h: f64): void {
+        calls.append("clip $x $y $w $h")
+        return
+    }
+    fun clipPop(): void {
+        calls.append("unclip")
+        return
+    }
+}
+
+class Shop(var items: int by State(5), var picked: int by State(1))
+val shop = Shop()
+
+class ShopView() : Component {
+    fun render(): El {
+        val rows: array<El> = []
+        for (i in 0 until shop.items) rows.append(listRow(i == shop.picked, style(), pick(i), [text("Item $i", style()), caption("x", style())]).keyed("i$i"))
+        windowPanel("Shop", { -> shop.items = 0 }, style().width(240.0).anchor(FLEX_ANCHOR_CENTER, 0.0, 0.0).raw("css:color", "red"), [
+            list(style().height(120.0), rows),
+            slider(0.5, 0.0, 1.0, style(), { v -> shop.picked = 0 })
+        ])
+    }
+}
+
+fun makeShop(): Component = ShopView()
+
+fun pick(i: int): () -> void = { -> shop.picked = i }
+
+fun run(var log: Log, var changes: array<int>): void {
+    var t = viewTree(themeDefault(), tableFont([32, 97], [400], [[250, 500]], 0.8, 0.2, 560, true))
+    val unused = t.mount(comp("shop", makeShop))
+    t.update(800.0, 600.0)
+    t.paint(log)
+    shop.items = 7
+    t.update(800.0, 600.0)
+    t.paint(log)
+    shop.items = 5
+    t.update(800.0, 600.0)
+    t.paint(log)
+    t.takeChanges(changes)
+    return
+}
+
+fun determinism(): void {
+    var first = Log([])
+    var second = Log([])
+    var changesA: array<int> = []
+    var changesB: array<int> = []
+    run(first, changesA)
+    run(second, changesB)
+    var same = first.calls.size == second.calls.size && first.calls.size > 20
+    for (i in 0 until first.calls.size) if (same && first.calls[i] != second.calls[i]) same = false
+    check(same, "the same tree paints the same calls in the same order (${first.calls.size} calls)")
+    same = changesA.size == changesB.size && changesA.size > 0
+    for (i in 0 until changesA.size) if (same && changesA[i] != changesB[i]) same = false
+    check(same, "and records the same changes (${changesA.size / 3})")
+    return
+}
+
+fun main: int {
+    rawAndOrder()
+    themes()
+    tables()
+    determinism()
+    println("style: $passed passed, $failed failed")
+    if (failed == 0) 0 else 1
+}

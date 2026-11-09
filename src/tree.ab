@@ -757,6 +757,10 @@ fun ViewTree.paintText(n: int, x: f64, y: f64, w: f64, a: f64, var painter: View
         val lw = lines.widths[i]
         val lx = if (align == TEXT_CENTER) left + (room - lw) / 2.0 else if (align == TEXT_RIGHT) left + room - lw else left
         if (lines.ends[i] > lines.starts[i]) painter.text(face, t, lines.starts[i], lines.ends[i], lx, ly, this.looks[n], a)
+        if (lines.ellipsis && i == lines.starts.size - 1) {
+            val before = if (lines.ends[i] > lines.starts[i]) this.texts.font.width(face, t, lines.starts[i], lines.ends[i]) else 0.0
+            painter.text(face, TEXT_ELLIPSIS, 0, TEXT_ELLIPSIS.size, lx + before, ly, this.looks[n], a)
+        }
         ly = ly + lh
     }
     return
