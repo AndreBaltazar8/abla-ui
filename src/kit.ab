@@ -1,0 +1,92 @@
+// The kit: windows, panels, buttons, toggles, sliders, tabs, labels, lists and tooltips,
+// built only from elements and the theme (`kitTheme`; a tree paints with its own,
+// `ViewTree.useTheme` sets both). Every part takes an extra style that wins over the
+// theme's, so an instance can change anything.
+//
+//   windowPanel("Settings", { -> settings.open = false }, style().width(400.0), [
+//       tabs(["Video", "Audio"], settings.tab, { i -> settings.tab = i }),
+//       toggle("Shadows", shadows, { on -> setShadows(on) }),
+//       slider(volume, 0.0, 1.0, { v -> setVolume(v) }),
+//       button("Reset", { -> reset() })
+//   ])
+
+import "abla/float"
+import "./flex.ab"
+import "./style.ab"
+import "./tree.ab"
+
+var kitTheme: Theme = themeDefault()
+
+/** Use theme `t` for the kit's elements and the tree's own painting (sliders, focus, tooltips). */
+fun ViewTree.useTheme(t: Theme): void {
+    kitTheme = t
+    this.theme = t
+    for (i in 0 until this.lookValid.size) this.lookValid[i] = false
+    return
+}
+
+/** Plain text in the theme's label style. */
+fun label(t: string, s: Style): El = text(t, kitTheme.label.with(s))
+
+/** Muted, smaller text. */
+fun caption(t: string, s: Style): El = text(t, kitTheme.caption.with(s))
+
+/** A panel or card: it takes the pointer where it is drawn. */
+fun panel(s: Style, children: array<El>): El = column(kitTheme.panel.with(s), children)
+
+/** A push button; `f` runs when it is clicked or activated. */
+fun button(t: string, s: Style, f: () -> void): El =
+    row(kitTheme.button.with(s), [text(t, style())]).pressable(f)
+
+fun kitToggled(f: (bool) -> void, on: bool): () -> void = { -> f(!on) }
+
+/** A checkbox and its label; `f` gets the new value when it is toggled. */
+fun toggle(t: string, on: bool, s: Style, f: (bool) -> void): El =
+    row(style().gap(10.0).align(FLEX_CENTER).height(30.0).with(s), [
+        row(style().align(FLEX_CENTER).justify(FLEX_CENTER).with(kitTheme.check), [
+            box(kitTheme.checkMark.hidden(!on), [])
+        ]),
+        text(t, style().grow(1.0))
+    ]).pressable(kitToggled(f, on)).selectedIf(on)
+
+/** A horizontal slider over [lo, hi]; `f` gets each new value while it is dragged or stepped. */
+fun slider(value: f64, lo: f64, hi: f64, s: Style, f: (f64) -> void): El =
+    box(style().height(26.0).with(s), []).slider(value, lo, hi, 0.0, f)
+
+fun kitPick(f: (int) -> void, i: int): () -> void = { -> f(i) }
+
+/** A row of tabs; `f` gets the index of the one picked. */
+fun tabs(labels: array<string>, selected: int, s: Style, f: (int) -> void): El {
+    val items: array<El> = []
+    for (i in 0 until labels.size) {
+        items.append(row(kitTheme.tab.grow(1.0).set(P_WIDTH, 0.0).set(P_SHRINK, 1.0), [text(labels[i], style())])
+            .pressable(kitPick(f, i)).selectedIf(i == selected).keyed(labels[i]))
+    }
+    row(style().gap(4.0).with(s), items)
+}
+
+/** A selectable list row holding `children`; `f` runs when it is clicked or activated. */
+fun listRow(selected: bool, s: Style, f: () -> void, children: array<El>): El =
+    row(kitTheme.row.with(s), children).pressable(f).selectedIf(selected)
+
+/** A scrolling list of rows (give it a height or a maximum height). */
+fun list(s: Style, rows: array<El>): El = column(style().scroll(SCROLL_Y).gap(2.0).with(s), rows)
+
+val KIT_CROSS = "✕"
+
+/**
+ * A window: a frame with a title bar, `title` and a close button, and `body` below it.
+ * `close` runs on the close button, or on Escape (or B) when it is the topmost window.
+ */
+fun windowPanel(title: string, close: () -> void, s: Style, body: array<El>): El =
+    column(kitTheme.window.with(s), [
+        row(kitTheme.titleBar, [
+            text(title, kitTheme.title),
+            row(style().size(32.0, 32.0).align(FLEX_CENTER).justify(FLEX_CENTER).radius(6.0).color(kitTheme.muted, kitTheme.mutedA)
+                .hover(style().fill(0xffffff, 0.08).color(kitTheme.text, kitTheme.textA)), [text(KIT_CROSS, style())]).pressable(close).keyed("close")
+        ]).keyed("title"),
+        column(kitTheme.body, body).keyed("body")
+    ]).closable(close)
+
+/** `el` with a tooltip. */
+fun tooltip(el: El, t: string): El = el.tip(t)

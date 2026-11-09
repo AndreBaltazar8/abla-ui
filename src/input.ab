@@ -1,0 +1,233 @@
+// Input over the retained tree, from abstract events a platform fills each frame
+// (`ViewInput`), with the behaviour of abla-forge's immediate-mode UI:
+//
+// - The pointer goes to the topmost thing under it: a pressable or slider becomes hot
+//   (hovered); a panel (`solid`), a scroller or a window takes the pointer too, so the
+//   game can ignore world clicks (`wantsPointer`). Nothing under a panel is reachable.
+// - A press on a pressable fires it when released over it. A slider follows the pointer
+//   while held. A mostly vertical drag that starts in a scroller scrolls it instead, and the
+//   wheel scrolls the innermost scroller under the pointer.
+// - Tab / Shift+Tab move focus through the focusable nodes in drawing order; Up / Down too
+//   while navigating (`navigating`, or whenever a window is shown). Enter / Space / A
+//   activate the focused node; Left / Right step a focused slider, Home / End jump.
+//   A focused node inside a scroller is scrolled into view.
+// - Escape (or B) clears focus and closes the topmost window (its `closable` handler).
+// - A tooltip shows once the pointer has rested on its node half a second.
+//
+// Hit testing uses the regions of the last paint, so call input, then update, then paint.
+
+import "abla/float"
+import "abla/math"
+import "./flex.ab"
+import "./style.ab"
+import "./tree.ab"
+
+val NAV_NONE = 0
+val NAV_NEXT = 1  // Tab
+val NAV_PREV = 2  // Shift+Tab
+val NAV_UP = 3
+val NAV_DOWN = 4
+
+val VIEW_DRAG_SLOP = 6.0
+
+/** One frame's input, in the tree's logical px. */
+class ViewInput(
+    var x: f64, var y: f64, var down: bool, var pressed: bool, var released: bool,
+    var wheelX: f64, var wheelY: f64,
+    var nav: int, var left: bool, var right: bool, var home: bool, var end: bool,
+    var activate: bool, var cancel: bool,
+    var time: f64
+)
+
+fun viewInput(): ViewInput = ViewInput(-1.0e9, -1.0e9, false, false, false, 0.0, 0.0, NAV_NONE, false, false, false, false, false, false, 0.0)
+
+/** Is `a` an ancestor of `n` (or `n` itself)? */
+fun ViewTree.isUnder(n: int, a: int): bool {
+    var at = n
+    while (at >= 0) {
+        if (at == a) return true
+        at = this.flex.parent[at]
+    }
+    false
+}
+
+fun ViewTree.scrolls(n: int): bool = this.flex.has(n, FLEX_F_SCROLL_X) || this.flex.has(n, FLEX_F_SCROLL_Y)
+
+fun ViewTree.enabled(n: int): bool = (this.own[n] & ON_DISABLED) == 0
+
+fun ViewTree.setOwn(n: int, bit: int, on: bool): void {
+    if (n < 0) return
+    this.own[n] = if (on) this.own[n] | bit else this.own[n] & (0 - 1 - bit)
+    return
+}
+
+fun ViewTree.scrollTo(n: int, offset: f64): void {
+    val maxOffset = fmax(0.0, this.flex.contentH[n] - this.flex.h[n])
+    this.sy[n] = fmax(0.0, fmin(offset, maxOffset))
+    return
+}
+
+/** A slider's value at pointer x, snapped to its step. */
+fun ViewTree.sliderAt(n: int, px: f64): f64 {
+    val w = this.flex.w[n]
+    val t = if (w > 0.0) fmax(0.0, fmin(1.0, (px - this.ax[n]) / w)) else 0.0
+    var v = this.lo[n] + t * (this.hi[n] - this.lo[n])
+    if (this.step[n] > 0.0) v = this.lo[n] + floor((v - this.lo[n]) / this.step[n] + 0.5) * this.step[n]
+    v
+}
+
+fun ViewTree.slide(n: int, v: f64): void {
+    val clamped = fmax(this.lo[n], fmin(this.hi[n], v))
+    if (clamped == this.value[n]) return
+    this.value[n] = clamped
+    this.change[n](clamped)
+    return
+}
+
+/** Scroll the scrollers holding `n` so it shows. */
+fun ViewTree.reveal(n: int): void {
+    var s = this.flex.parent[n]
+    while (s >= 0) {
+        if (this.flex.has(s, FLEX_F_SCROLL_Y)) {
+            val top = this.ay[n] - this.ay[s] + this.sy[s]
+            val bottom = top + this.flex.h[n]
+            if (top < this.sy[s]) this.scrollTo(s, top)
+            else if (bottom > this.sy[s] + this.flex.h[s]) this.scrollTo(s, bottom - this.flex.h[s])
+        }
+        s = this.flex.parent[s]
+    }
+    return
+}
+
+fun ViewTree.focus(n: int): void {
+    this.setOwn(this.focused, ON_FOCUSED, false)
+    this.focused = n
+    this.setOwn(n, ON_FOCUSED, true)
+    if (n >= 0) this.reveal(n)
+    return
+}
+
+/** Does the UI hold the pointer (over a panel, a window, a widget, or dragging one)? */
+fun ViewTree.wantsPointer(): bool = this.overUi || this.active >= 0 || this.dragScroll >= 0
+
+/** Does the UI use the navigation keys now (something focused, or a window to navigate)? */
+fun ViewTree.wantsKeys(): bool = this.focused >= 0 || this.navigating || this.windows.size > 0
+
+fun ViewTree.input(e: ViewInput): void {
+    this.now = e.time
+    // What the pointer is over: the topmost region, then its ancestors.
+    var top = -1
+    var hot = -1
+    var wheel = -1
+    var tip = -1
+    var over = false
+    var i = this.hitNode.size - 1
+    while (i >= 0) {
+        val n = this.hitNode[i]
+        val b = i * 4
+        if (e.x >= this.hitRect[b] && e.y >= this.hitRect[b + 1] && e.x < this.hitRect[b + 2] && e.y < this.hitRect[b + 3]) {
+            if (top < 0) top = n
+            if (this.isUnder(top, n)) {
+                over = true
+                val r = this.role[n]
+                if (hot < 0 && (r == ROLE_PRESS || r == ROLE_SLIDER) && this.enabled(n)) hot = n
+                if (wheel < 0 && this.scrolls(n)) wheel = n
+                if (tip < 0 && this.tooltip[n] != "") tip = n
+            }
+        }
+        i = i - 1
+    }
+    // Hover and press states.
+    if (hot != this.hot) {
+        this.setOwn(this.hot, ON_HOVER, false)
+        this.setOwn(hot, ON_HOVER, true)
+        this.hot = hot
+    }
+    if (e.pressed) {
+        this.pressX = e.x
+        this.pressY = e.y
+        if (this.focused >= 0 && this.focused != hot) this.focus(-1)
+        this.active = hot
+        if (hot >= 0 && this.role[hot] == ROLE_SLIDER) this.slide(hot, this.sliderAt(hot, e.x))
+        this.dragScroll = -1
+        this.dragGrab = if (wheel >= 0 && (hot < 0 || this.role[hot] != ROLE_SLIDER)) f64FromInt(wheel) else -1.0
+    }
+    val a = this.active
+    if (e.down && a >= 0 && this.role[a] == ROLE_SLIDER) this.slide(a, this.sliderAt(a, e.x))
+    // A vertical drag from inside a scroller scrolls it (and cancels a press it began on).
+    if (e.down && this.dragScroll < 0 && this.dragGrab >= 0.0 && !e.pressed) {
+        val dx = e.x - this.pressX
+        val dy = e.y - this.pressY
+        if (fabs(dy) > VIEW_DRAG_SLOP && fabs(dy) > fabs(dx)) {
+            val s = f64ToInt(this.dragGrab)
+            this.dragScroll = s
+            this.dragGrab = this.sy[s] + this.pressY
+            this.active = -1
+        }
+    }
+    if (this.dragScroll >= 0) {
+        if (e.down) this.scrollTo(this.dragScroll, this.dragGrab - e.y)
+        else this.dragScroll = -1
+    }
+    this.setOwn(this.active, ON_PRESSED, this.active >= 0 && (this.active == hot || this.role[this.active] == ROLE_SLIDER) && e.down)
+    if (e.released || !e.down) {
+        val was = this.active
+        if (was >= 0) {
+            this.setOwn(was, ON_PRESSED, false)
+            this.active = -1
+            if (e.released && was == hot && this.role[was] == ROLE_PRESS) this.press[was]()
+        }
+        if (!e.down) {
+            this.dragGrab = -1.0
+            this.dragScroll = -1
+        }
+    }
+    // The wheel scrolls the innermost scroller under the pointer.
+    if (e.wheelY != 0.0 && wheel >= 0) this.scrollTo(wheel, this.sy[wheel] + e.wheelY)
+    // Keys and the pad.
+    val arrows = this.navigating || this.windows.size > 0
+    val step = if (e.nav == NAV_NEXT && (this.focused >= 0 || arrows)) 1
+        else if (e.nav == NAV_PREV && (this.focused >= 0 || arrows)) -1
+        else if (e.nav == NAV_DOWN && arrows) 1
+        else if (e.nav == NAV_UP && arrows) -1
+        else 0
+    val count = this.focusOrder.size
+    if (step != 0 && count > 0) {
+        var at = -1
+        for (k in 0 until count) if (this.focusOrder[k] == this.focused) at = k
+        val next = if (at < 0) (if (step > 0) 0 else count - 1) else (at + step + count) % count
+        this.focus(this.focusOrder[next])
+    }
+    val f = this.focused
+    if (f >= 0 && step == 0) {
+        val r = this.role[f]
+        if (e.activate && r == ROLE_PRESS) this.press[f]()
+        if (r == ROLE_SLIDER) {
+            val by = if (this.step[f] > 0.0) this.step[f] else (this.hi[f] - this.lo[f]) / 20.0
+            if (e.left) this.slide(f, this.value[f] - by)
+            if (e.right) this.slide(f, this.value[f] + by)
+            if (e.home) this.slide(f, this.lo[f])
+            if (e.end) this.slide(f, this.hi[f])
+        }
+    }
+    if (e.cancel) {
+        this.focus(-1)
+        if (this.windows.size > 0) {
+            val w = this.windows[this.windows.size - 1]
+            this.press[w]()
+        }
+    }
+    // Tooltips: the pointer resting on one half a second.
+    if (tip != this.tipCandidate) {
+        this.tipCandidate = tip
+        this.hotSince = e.time
+        this.tipNode = -1
+    } else if (tip >= 0 && !e.down && e.time - this.hotSince >= VIEW_TOOLTIP_DELAY && this.tipNode != tip) {
+        this.tipNode = tip
+        this.tipX = e.x
+        this.tipY = e.y
+    }
+    if (e.down) this.tipNode = -1
+    this.overUi = over
+    return
+}

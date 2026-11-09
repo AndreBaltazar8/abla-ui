@@ -3,14 +3,19 @@
 // with real fonts answers from its glyph metrics, a backend without them from width
 // tables, a test from a fixed advance.
 
-/** What wrapping needs from a font. Spans are byte offsets into UTF-8 text. */
+/**
+ * What wrapping needs from the fonts. A face is the platform's handle for a font at a
+ * size and weight (from `face`). Spans are byte offsets into UTF-8 text.
+ */
 interface TextFont {
-    /** The width of bytes [start, end) of `text`, drawn as one run. */
-    fun width(text: string, start: int, end: int): f64
+    /** The face for a CSS font family list at `size` px and `weight` (400 regular, 700 bold). */
+    fun face(family: string, size: f64, weight: int): int
+    /** The width of bytes [start, end) of `text` in `face`, drawn as one run. */
+    fun width(face: int, text: string, start: int, end: int): f64
     /** Where the grapheme cluster that starts at byte `i` ends. */
     fun clusterEnd(text: string, i: int): int
-    /** The height of one line. */
-    fun lineHeight(): f64
+    /** The height of one line of `face`. */
+    fun lineHeight(face: int): f64
 }
 
 /** Wrapped lines: byte spans of the text, each line's width, the widest. */
@@ -23,7 +28,7 @@ fun textLines(): TextLines = TextLines([], [], [], 0.0, false)
  * only where the word alone is wider, and at every '\n'. With `maxLines` > 0 the lines
  * after it are dropped and `cut` is set. Trailing spaces don't count toward a line's width.
  */
-fun textWrap(text: string, maxWidth: f64, maxLines: int, var font: TextFont, var out: TextLines): void {
+fun textWrap(text: string, face: int, maxWidth: f64, maxLines: int, var font: TextFont, var out: TextLines): void {
     out.starts.clear()
     out.ends.clear()
     out.widths.clear()
@@ -40,19 +45,19 @@ fun textWrap(text: string, maxWidth: f64, maxLines: int, var font: TextFont, var
         }
         val b = if (i < text.size) text[i] else 10
         if (b == 10) {
-            textLine(out, text, lineStart, i, font)
+            textLine(out, text, face, lineStart, i, font)
             lineStart = i + 1
             width = 0.0
             lastBreak = -1
             i = i + 1
         } else {
             val next = font.clusterEnd(text, i)
-            val advance = font.width(text, i, next)
+            val advance = font.width(face, text, i, next)
             if (b != 32 && width + advance > maxWidth + 0.001 && i > lineStart) {
                 val atSpace = lastBreak > lineStart
-                textLine(out, text, lineStart, if (atSpace) lastBreak else i, font)
+                textLine(out, text, face, lineStart, if (atSpace) lastBreak else i, font)
                 lineStart = if (atSpace) lastBreak + 1 else i
-                width = font.width(text, lineStart, i)
+                width = font.width(face, text, lineStart, i)
                 lastBreak = -1
             } else {
                 if (b == 32) lastBreak = i
@@ -64,10 +69,10 @@ fun textWrap(text: string, maxWidth: f64, maxLines: int, var font: TextFont, var
     return
 }
 
-fun textLine(var out: TextLines, text: string, start: int, end: int, var font: TextFont): void {
+fun textLine(var out: TextLines, text: string, face: int, start: int, end: int, var font: TextFont): void {
     var e = end
     while (e > start && text[e - 1] == 32) e = e - 1
-    val w = if (e > start) font.width(text, start, e) else 0.0
+    val w = if (e > start) font.width(face, text, start, e) else 0.0
     out.starts.append(start)
     out.ends.append(e)
     out.widths.append(w)

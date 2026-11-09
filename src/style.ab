@@ -1,0 +1,428 @@
+// Styles: ordered entries (condition, property, value), the last matching entry wins, as
+// in abla-one. Values are numbers: sizes in logical px, colours 0xRRGGBB with a separate
+// alpha, enums as their constants. A condition is "always", a set of interaction states
+// (hover, pressed, focused, selected, disabled; all must hold) or a viewport breakpoint
+// (`upTo(760, …)`: the viewport is at most 760 px wide; `from(1500, …)`: at least 1500).
+//
+//   val card = style().padding(16.0).gap(8.0).fill(0x1a1612, 0.94).radius(14.0)
+//       .hover(style().border(1.0, 0xe9b866, 0.9))
+//       .upTo(600.0, style().padding(8.0))
+//
+// Layout properties change the layout when they change; paint properties (colours,
+// borders, radii, shadows, opacity, text colour) only repaint. Interaction-state
+// entries may only hold paint properties, so hovering never lays anything out again.
+
+import "abla/float"
+import "./flex.ab"
+
+// ── properties ───────────────────────────────────────────────────────────────
+
+// Layout.
+val P_DIR = 1           // FLEX_COLUMN / FLEX_ROW / FLEX_STACK
+val P_WRAP = 2          // 0 / 1
+val P_GAP = 3
+val P_CROSS_GAP = 4
+val P_PAD_L = 5
+val P_PAD_T = 6
+val P_PAD_R = 7
+val P_PAD_B = 8
+val P_WIDTH = 9         // px, or SIZE_CONTENT / SIZE_FILL
+val P_HEIGHT = 10
+val P_MIN_W = 11
+val P_MAX_W = 12
+val P_MIN_H = 13
+val P_MAX_H = 14
+val P_GROW = 15
+val P_SHRINK = 16
+val P_ALIGN = 17        // FLEX_START / CENTER / END / STRETCH
+val P_JUSTIFY = 18      // FLEX_START / CENTER / END / BETWEEN
+val P_ALIGN_SELF = 19
+val P_SCROLL = 20       // 0, SCROLL_X, SCROLL_Y, or both
+val P_ANCHOR = 21       // FLEX_ANCHOR_*: absolute, placed by anchor in the parent
+val P_OFF_X = 22
+val P_OFF_Y = 23
+val P_HIDDEN = 24
+val P_FONT_SIZE = 25
+val P_FONT_WEIGHT = 26
+val P_FONT_FAMILY = 27  // index into the theme's families
+val P_LINE_HEIGHT = 28  // px; 0 = the font's
+val P_MAX_LINES = 29
+val P_LAYOUT_END = 30   // properties below this one are layout
+
+// Paint.
+val P_FILL = 31
+val P_FILL_A = 32
+val P_FILL2 = 33        // a gradient's second stop (P_FILL is the first)
+val P_FILL2_A = 34
+val P_ANGLE = 35        // gradient angle, radians (0 = top to bottom)
+val P_BORDER_W = 36
+val P_BORDER = 37
+val P_BORDER_A = 38
+val P_R_TL = 39
+val P_R_TR = 40
+val P_R_BR = 41
+val P_R_BL = 42
+val P_CHAMFER = 43      // 1: corners are cut, not rounded
+val P_GLOW_R = 44
+val P_GLOW = 45
+val P_GLOW_A = 46
+val P_SHADOW_BLUR = 47
+val P_SHADOW_Y = 48
+val P_SHADOW_A = 49
+val P_HATCH_A = 50
+val P_HATCH_P = 51
+val P_OPACITY = 52
+val P_CLIP = 53
+val P_COLOR = 54        // text colour
+val P_COLOR_A = 55
+val P_TEXT_ALIGN = 56   // TEXT_LEFT / TEXT_CENTER / TEXT_RIGHT
+val P_TEXT_FX = 57      // TEXT_FX_PLAIN / TEXT_FX_SHADOWED / TEXT_FX_OUTLINED
+val P_FX = 58           // the shadow's or outline's colour
+val P_FX_A = 59
+val P_SOLID = 60        // 1: takes the pointer (a panel), so clicks don't reach the world
+val P_COUNT = 61
+
+val SIZE_CONTENT = -1.0
+val SIZE_FILL = -2.0
+
+val SCROLL_X = 1
+val SCROLL_Y = 2
+
+val TEXT_LEFT = 0
+val TEXT_CENTER = 1
+val TEXT_RIGHT = 2
+
+val TEXT_FX_PLAIN = 0
+val TEXT_FX_SHADOWED = 1
+val TEXT_FX_OUTLINED = 2
+
+// Conditions.
+val ON_ALWAYS = 0
+val ON_HOVER = 1
+val ON_PRESSED = 2
+val ON_FOCUSED = 4
+val ON_SELECTED = 8
+val ON_DISABLED = 16
+val ON_UP_TO = 100000   // + the width
+val ON_FROM = 200000    // + the width
+
+/** Entries, three numbers each: condition, property, value. Builders return a new Style. */
+class Style(val e: array<f64>)
+
+fun style(): Style = Style([])
+
+fun Style.set(prop: int, value: f64): Style = this.setOn(ON_ALWAYS, prop, value)
+
+fun Style.setOn(cond: int, prop: int, value: f64): Style {
+    val out: array<f64> = []
+    for (v in this.e) out.append(v)
+    out.append(f64FromInt(cond))
+    out.append(f64FromInt(prop))
+    out.append(value)
+    Style(out)
+}
+
+/** This style, then `other`'s entries (which win). */
+fun Style.with(other: Style): Style {
+    val out: array<f64> = []
+    for (v in this.e) out.append(v)
+    for (v in other.e) out.append(v)
+    Style(out)
+}
+
+/** `other`'s entries apply only in `cond` (states combine with any condition already there). */
+fun Style.on(cond: int, other: Style): Style {
+    val out: array<f64> = []
+    for (v in this.e) out.append(v)
+    var i = 0
+    while (i < other.e.size) {
+        val inner = f64ToInt(other.e[i])
+        val combined = if (inner == ON_ALWAYS) cond else if (cond < ON_UP_TO && inner < ON_UP_TO) cond | inner else cond
+        out.append(f64FromInt(combined))
+        out.append(other.e[i + 1])
+        out.append(other.e[i + 2])
+        i = i + 3
+    }
+    Style(out)
+}
+
+fun Style.hover(other: Style): Style = this.on(ON_HOVER, other)
+fun Style.pressed(other: Style): Style = this.on(ON_PRESSED, other)
+fun Style.focused(other: Style): Style = this.on(ON_FOCUSED, other)
+fun Style.selected(other: Style): Style = this.on(ON_SELECTED, other)
+fun Style.disabled(other: Style): Style = this.on(ON_DISABLED, other)
+fun Style.upTo(width: f64, other: Style): Style = this.on(ON_UP_TO + f64ToInt(width), other)
+fun Style.from(width: f64, other: Style): Style = this.on(ON_FROM + f64ToInt(width), other)
+
+fun Style.same(other: Style): bool {
+    if (this.e.size != other.e.size) return false
+    for (i in 0 until this.e.size) if (this.e[i] != other.e[i]) return false
+    true
+}
+
+// Layout builders.
+fun Style.row(): Style = this.set(P_DIR, 1.0)
+fun Style.column(): Style = this.set(P_DIR, 0.0)
+fun Style.stack(): Style = this.set(P_DIR, 2.0)
+fun Style.wrap(): Style = this.set(P_WRAP, 1.0)
+fun Style.gap(v: f64): Style = this.set(P_GAP, v).set(P_CROSS_GAP, v)
+fun Style.gaps(main: f64, cross: f64): Style = this.set(P_GAP, main).set(P_CROSS_GAP, cross)
+fun Style.padding(v: f64): Style = this.set(P_PAD_L, v).set(P_PAD_T, v).set(P_PAD_R, v).set(P_PAD_B, v)
+fun Style.paddingXY(x: f64, y: f64): Style = this.set(P_PAD_L, x).set(P_PAD_R, x).set(P_PAD_T, y).set(P_PAD_B, y)
+fun Style.paddings(l: f64, t: f64, r: f64, b: f64): Style = this.set(P_PAD_L, l).set(P_PAD_T, t).set(P_PAD_R, r).set(P_PAD_B, b)
+fun Style.width(v: f64): Style = this.set(P_WIDTH, v)
+fun Style.height(v: f64): Style = this.set(P_HEIGHT, v)
+fun Style.size(w: f64, h: f64): Style = this.set(P_WIDTH, w).set(P_HEIGHT, h)
+fun Style.fillWidth(): Style = this.set(P_WIDTH, SIZE_FILL)
+fun Style.fillHeight(): Style = this.set(P_HEIGHT, SIZE_FILL)
+fun Style.fillBoth(): Style = this.set(P_WIDTH, SIZE_FILL).set(P_HEIGHT, SIZE_FILL)
+fun Style.minWidth(v: f64): Style = this.set(P_MIN_W, v)
+fun Style.maxWidth(v: f64): Style = this.set(P_MAX_W, v)
+fun Style.minHeight(v: f64): Style = this.set(P_MIN_H, v)
+fun Style.maxHeight(v: f64): Style = this.set(P_MAX_H, v)
+fun Style.grow(v: f64): Style = this.set(P_GROW, v)
+fun Style.shrink(v: f64): Style = this.set(P_SHRINK, v)
+fun Style.align(v: int): Style = this.set(P_ALIGN, f64FromInt(v))
+fun Style.justify(v: int): Style = this.set(P_JUSTIFY, f64FromInt(v))
+fun Style.alignSelf(v: int): Style = this.set(P_ALIGN_SELF, f64FromInt(v))
+fun Style.scroll(axes: int): Style = this.set(P_SCROLL, f64FromInt(axes))
+/** Out of the flow, placed by `anchor` (FLEX_ANCHOR_*) in the parent, inset by (dx, dy). */
+fun Style.anchor(anchor: int, dx: f64, dy: f64): Style = this.set(P_ANCHOR, f64FromInt(anchor)).set(P_OFF_X, dx).set(P_OFF_Y, dy)
+fun Style.hidden(on: bool): Style = this.set(P_HIDDEN, if (on) 1.0 else 0.0)
+fun Style.fontSize(v: f64): Style = this.set(P_FONT_SIZE, v)
+fun Style.weight(v: int): Style = this.set(P_FONT_WEIGHT, f64FromInt(v))
+fun Style.family(index: int): Style = this.set(P_FONT_FAMILY, f64FromInt(index))
+fun Style.lineHeight(v: f64): Style = this.set(P_LINE_HEIGHT, v)
+fun Style.maxLines(v: int): Style = this.set(P_MAX_LINES, f64FromInt(v))
+
+// Paint builders.
+fun Style.fill(rgb: int, alpha: f64): Style = this.set(P_FILL, f64FromInt(rgb)).set(P_FILL_A, alpha).set(P_FILL2, f64FromInt(rgb)).set(P_FILL2_A, alpha)
+fun Style.gradient(rgb1: int, a1: f64, rgb2: int, a2: f64, angle: f64): Style =
+    this.set(P_FILL, f64FromInt(rgb1)).set(P_FILL_A, a1).set(P_FILL2, f64FromInt(rgb2)).set(P_FILL2_A, a2).set(P_ANGLE, angle)
+fun Style.border(width: f64, rgb: int, alpha: f64): Style = this.set(P_BORDER_W, width).set(P_BORDER, f64FromInt(rgb)).set(P_BORDER_A, alpha)
+fun Style.radius(r: f64): Style = this.radii(r, r, r, r)
+fun Style.radii(tl: f64, tr: f64, br: f64, bl: f64): Style = this.set(P_R_TL, tl).set(P_R_TR, tr).set(P_R_BR, br).set(P_R_BL, bl).set(P_CHAMFER, 0.0)
+/** Cut corners (chamfers) instead of rounded ones. */
+fun Style.chamfer(tl: f64, tr: f64, br: f64, bl: f64): Style = this.set(P_R_TL, tl).set(P_R_TR, tr).set(P_R_BR, br).set(P_R_BL, bl).set(P_CHAMFER, 1.0)
+fun Style.glow(radius: f64, rgb: int, alpha: f64): Style = this.set(P_GLOW_R, radius).set(P_GLOW, f64FromInt(rgb)).set(P_GLOW_A, alpha)
+fun Style.shadow(blur: f64, y: f64, alpha: f64): Style = this.set(P_SHADOW_BLUR, blur).set(P_SHADOW_Y, y).set(P_SHADOW_A, alpha)
+fun Style.hatch(alpha: f64, period: f64): Style = this.set(P_HATCH_A, alpha).set(P_HATCH_P, period)
+fun Style.opacity(v: f64): Style = this.set(P_OPACITY, v)
+fun Style.clip(): Style = this.set(P_CLIP, 1.0)
+fun Style.color(rgb: int, alpha: f64): Style = this.set(P_COLOR, f64FromInt(rgb)).set(P_COLOR_A, alpha)
+fun Style.textAlign(v: int): Style = this.set(P_TEXT_ALIGN, f64FromInt(v))
+fun Style.textFx(fx: int, rgb: int, alpha: f64): Style = this.set(P_TEXT_FX, f64FromInt(fx)).set(P_FX, f64FromInt(rgb)).set(P_FX_A, alpha)
+/** Takes the pointer where it is drawn (a panel or a card), so clicks don't reach the world. */
+fun Style.solid(): Style = this.set(P_SOLID, 1.0)
+
+// ── resolving ────────────────────────────────────────────────────────────────
+
+/** Does an entry's condition hold for interaction states `states` and a viewport `width` wide? */
+fun styleMatches(cond: int, states: int, width: f64): bool =
+    if (cond == ON_ALWAYS) true
+    else if (cond >= ON_FROM) width >= f64FromInt(cond - ON_FROM)
+    else if (cond >= ON_UP_TO) width <= f64FromInt(cond - ON_UP_TO)
+    else (cond & states) == cond
+
+/** The value of `prop` under `states` and `width`, or `fallback` when no entry sets it. */
+fun Style.get(prop: int, states: int, width: f64, fallback: f64): f64 {
+    var v = fallback
+    var i = 0
+    val p = f64FromInt(prop)
+    while (i < this.e.size) {
+        if (this.e[i + 1] == p && styleMatches(f64ToInt(this.e[i]), states, width)) v = this.e[i + 2]
+        i = i + 3
+    }
+    v
+}
+
+/** Does the style set any paint property under an interaction state? (Then a state change repaints.) */
+fun Style.reactsTo(states: int): bool {
+    var i = 0
+    while (i < this.e.size) {
+        val c = f64ToInt(this.e[i])
+        if (c != ON_ALWAYS && c < ON_UP_TO && (c & states) != 0) return true
+        i = i + 3
+    }
+    false
+}
+
+/** Does it have breakpoint entries (so a viewport resize may change it)? */
+fun Style.hasBreakpoints(): bool {
+    var i = 0
+    while (i < this.e.size) {
+        if (f64ToInt(this.e[i]) >= ON_UP_TO) return true
+        i = i + 3
+    }
+    false
+}
+
+/**
+ * How a box and its text are painted: what a renderer needs, resolved from a style for
+ * one set of interaction states. Colours 0xRRGGBB with an alpha.
+ */
+class Look(
+    var fill: int, var fillA: f64, var fill2: int, var fill2A: f64, var angle: f64,
+    var borderW: f64, var border: int, var borderA: f64,
+    var tl: f64, var tr: f64, var br: f64, var bl: f64, var chamfer: bool,
+    var glowR: f64, var glow: int, var glowA: f64,
+    var shadowBlur: f64, var shadowY: f64, var shadowA: f64,
+    var hatchA: f64, var hatchP: f64,
+    var opacity: f64, var clip: bool, var solid: bool,
+    var color: int, var colorA: f64, var textAlign: int, var textFx: int, var fx: int, var fxA: f64
+)
+
+fun look(): Look = Look(0, 0.0, 0, 0.0, 0.0, 0.0, 0, 0.0, 0.0, 0.0, 0.0, 0.0, false, 0.0, 0, 0.0, 0.0, 0.0, 0.0, 0.0, 6.0, 1.0, false, false, 0xffffff, 1.0, TEXT_LEFT, TEXT_FX_PLAIN, 0, 0.0)
+
+/** Does the box show anything (a fill, a border, a glow or a shadow)? */
+fun Look.paintsBox(): bool = this.fillA > 0.0 || this.fill2A > 0.0 || (this.borderW > 0.0 && this.borderA > 0.0) || (this.glowR > 0.0 && this.glowA > 0.0) || this.shadowA > 0.0 || this.hatchA > 0.0
+
+/** Resolve `s`'s paint properties for `states` at `width` into `out` (text colour defaults to `ink`). */
+fun lookResolve(s: Style, states: int, width: f64, ink: int, inkA: f64, var out: Look): void {
+    // Defaults, then each matching entry in order.
+    out.fill = 0
+    out.fillA = 0.0
+    out.fill2 = 0
+    out.fill2A = 0.0
+    out.angle = 0.0
+    out.borderW = 0.0
+    out.border = 0
+    out.borderA = 0.0
+    out.tl = 0.0
+    out.tr = 0.0
+    out.br = 0.0
+    out.bl = 0.0
+    out.chamfer = false
+    out.glowR = 0.0
+    out.glow = 0
+    out.glowA = 0.0
+    out.shadowBlur = 0.0
+    out.shadowY = 0.0
+    out.shadowA = 0.0
+    out.hatchA = 0.0
+    out.hatchP = 6.0
+    out.opacity = 1.0
+    out.clip = false
+    out.solid = false
+    out.color = ink
+    out.colorA = inkA
+    out.textAlign = TEXT_LEFT
+    out.textFx = TEXT_FX_PLAIN
+    out.fx = 0
+    out.fxA = 0.0
+    var i = 0
+    while (i < s.e.size) {
+        val p = f64ToInt(s.e[i + 1])
+        if (p > P_LAYOUT_END && styleMatches(f64ToInt(s.e[i]), states, width)) {
+            val v = s.e[i + 2]
+            val c = f64ToInt(v)
+            if (p == P_FILL) out.fill = c
+            else if (p == P_FILL_A) out.fillA = v
+            else if (p == P_FILL2) out.fill2 = c
+            else if (p == P_FILL2_A) out.fill2A = v
+            else if (p == P_ANGLE) out.angle = v
+            else if (p == P_BORDER_W) out.borderW = v
+            else if (p == P_BORDER) out.border = c
+            else if (p == P_BORDER_A) out.borderA = v
+            else if (p == P_R_TL) out.tl = v
+            else if (p == P_R_TR) out.tr = v
+            else if (p == P_R_BR) out.br = v
+            else if (p == P_R_BL) out.bl = v
+            else if (p == P_CHAMFER) out.chamfer = v != 0.0
+            else if (p == P_GLOW_R) out.glowR = v
+            else if (p == P_GLOW) out.glow = c
+            else if (p == P_GLOW_A) out.glowA = v
+            else if (p == P_SHADOW_BLUR) out.shadowBlur = v
+            else if (p == P_SHADOW_Y) out.shadowY = v
+            else if (p == P_SHADOW_A) out.shadowA = v
+            else if (p == P_HATCH_A) out.hatchA = v
+            else if (p == P_HATCH_P) out.hatchP = v
+            else if (p == P_OPACITY) out.opacity = v
+            else if (p == P_CLIP) out.clip = v != 0.0
+            else if (p == P_COLOR) out.color = c
+            else if (p == P_COLOR_A) out.colorA = v
+            else if (p == P_TEXT_ALIGN) out.textAlign = c
+            else if (p == P_TEXT_FX) out.textFx = c
+            else if (p == P_FX) out.fx = c
+            else if (p == P_FX_A) out.fxA = v
+            else if (p == P_SOLID) out.solid = v != 0.0
+        }
+        i = i + 3
+    }
+    return
+}
+
+/** Are two looks the same? */
+fun Look.same(o: Look): bool =
+    this.fill == o.fill && this.fillA == o.fillA && this.fill2 == o.fill2 && this.fill2A == o.fill2A && this.angle == o.angle &&
+    this.borderW == o.borderW && this.border == o.border && this.borderA == o.borderA &&
+    this.tl == o.tl && this.tr == o.tr && this.br == o.br && this.bl == o.bl && this.chamfer == o.chamfer &&
+    this.glowR == o.glowR && this.glow == o.glow && this.glowA == o.glowA &&
+    this.shadowBlur == o.shadowBlur && this.shadowY == o.shadowY && this.shadowA == o.shadowA &&
+    this.hatchA == o.hatchA && this.hatchP == o.hatchP && this.opacity == o.opacity && this.clip == o.clip && this.solid == o.solid &&
+    this.color == o.color && this.colorA == o.colorA && this.textAlign == o.textAlign && this.textFx == o.textFx && this.fx == o.fx && this.fxA == o.fxA
+
+// ── themes ───────────────────────────────────────────────────────────────────
+
+/**
+ * Tokens and the kit's styles. A program makes its own (`themeDefault()` then replace
+ * fields); a subtree can use another with `themed(theme, el)`.
+ */
+class Theme(
+    val families: array<string>,   // CSS-style font families; index 0 is the default
+    var fontSize: f64, var fontWeight: int,
+    var text: int, var textA: f64, var muted: int, var mutedA: f64, var accent: int,
+    var panel: Style,       // a card or panel
+    var window: Style,      // a window's frame
+    var titleBar: Style,    // a window's title bar (its text style included)
+    var title: Style,       // a window's title text
+    var body: Style,        // a window's body (padding, gap)
+    var button: Style,      // with hover, pressed and focused states
+    var tab: Style,         // with hover and selected states
+    var track: Style,       // a slider's track
+    var trackFill: Style,   // the part of the track up to the value
+    var knob: Style,        // with hover and pressed states
+    var check: Style,       // a toggle's box, with hover and selected states
+    var checkMark: Style,   // the mark inside a selected toggle
+    var row: Style,         // a list row, with hover and selected states
+    var ring: Style,        // the focus outline
+    var ringGap: f64,
+    var tooltip: Style,     // a tooltip's box (and text)
+    var thumb: Style,       // a scrollbar's thumb, with hover and pressed states
+    var label: Style,       // plain text
+    var caption: Style      // muted, smaller text
+)
+
+fun themeDefault(): Theme {
+    val text = 0xeef2f6
+    val accent = 0x4aa3ff
+    Theme(
+        ["system-ui, sans-serif"], 15.0, 600,
+        text, 1.0, 0x9aa5b1, 1.0, accent,
+        style().fill(0x161b22, 0.94).border(1.0, 0x30363d, 1.0).radius(10.0).shadow(16.0, 6.0, 0.4).solid(),
+        style().fill(0x161b22, 0.96).border(1.0, 0x30363d, 1.0).radius(12.0).shadow(24.0, 8.0, 0.5).solid().clip(),
+        style().row().align(FLEX_CENTER).paddings(16.0, 0.0, 6.0, 0.0).height(44.0).fill(0x1f262e, 1.0).radii(12.0, 12.0, 0.0, 0.0),
+        style().grow(1.0).color(text, 1.0),
+        style().padding(16.0).gap(10.0),
+        style().row().align(FLEX_CENTER).justify(FLEX_CENTER).paddingXY(14.0, 0.0).height(34.0).fill(0x21262d, 1.0).border(1.0, 0x3d444d, 1.0).radius(6.0)
+            .hover(style().fill(0x30363d, 1.0).border(1.0, accent, 0.8))
+            .pressed(style().fill(0x1f6feb, 1.0).border(1.0, accent, 1.0)),
+        style().row().align(FLEX_CENTER).justify(FLEX_CENTER).height(34.0).fill(0x21262d, 1.0).radius(6.0)
+            .hover(style().fill(0x30363d, 1.0))
+            .selected(style().fill(0x1f6feb, 1.0).color(0xffffff, 1.0)),
+        style().fill(0x0d1117, 1.0).border(1.0, 0x30363d, 1.0).radius(3.0),
+        style().fill(accent, 1.0).radius(3.0),
+        style().fill(text, 1.0).radius(9.0).hover(style().glow(8.0, accent, 0.4)).pressed(style().fill(accent, 1.0)),
+        style().size(20.0, 20.0).fill(0x21262d, 1.0).border(1.0, 0x3d444d, 1.0).radius(4.0)
+            .hover(style().border(1.0, accent, 0.9)).selected(style().border(1.0, accent, 1.0)),
+        style().size(10.0, 10.0).fill(accent, 1.0).radius(2.0),
+        style().row().align(FLEX_CENTER).gap(10.0).paddingXY(10.0, 0.0).height(32.0).radius(4.0)
+            .hover(style().fill(0x30363d, 0.6)).selected(style().fill(accent, 0.18).border(1.0, accent, 0.7)),
+        style().border(1.5, accent, 0.95).radius(8.0),
+        3.0,
+        style().paddingXY(8.0, 6.0).maxWidth(260.0).fill(0x0d1117, 0.97).border(1.0, 0x30363d, 1.0).radius(6.0).shadow(12.0, 4.0, 0.5).fontSize(14.0),
+        style().fill(0x30363d, 1.0).radius(3.0).hover(style().fill(0x484f58, 1.0)).pressed(style().fill(accent, 1.0)),
+        style(),
+        style().color(0x9aa5b1, 1.0).fontSize(13.0)
+    )
+}

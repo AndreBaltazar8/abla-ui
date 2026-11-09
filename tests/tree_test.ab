@@ -1,0 +1,389 @@
+// Self-checks for the retained tree, its reconciliation, the paint walk, input and the kit.
+// Exits 0 when every check passes.
+
+import "abla/io"
+import "abla/float"
+import "abla/float/text"
+import "abla/math"
+import "../src/ui.ab"
+
+var failed = 0
+var passed = 0
+
+fun check(ok: bool, name: string): void {
+    if (ok) passed = passed + 1
+    else {
+        println("FAIL $name")
+        failed = failed + 1
+    }
+    return
+}
+
+fun near(a: f64, b: f64): bool = fabs(a - b) < 0.001
+
+/** 8 px a byte at any size, 20 px lines. */
+class Mono() : TextFont {
+    fun face(family: string, size: f64, weight: int): int = f64ToInt(size)
+    fun width(face: int, text: string, start: int, end: int): f64 = f64FromInt(end - start) * 8.0
+    fun clusterEnd(text: string, i: int): int = textCodePointEnd(text, i)
+    fun lineHeight(face: int): f64 = 20.0
+}
+
+/** Records what is painted. */
+class Recorder(var boxes: int, var texts: int, var clips: int, val said: array<string>, val textX: array<f64>, val textY: array<f64>, val boxRgb: array<int>) : ViewPainter {
+    fun box(x: f64, y: f64, w: f64, h: f64, look: Look, opacity: f64): void {
+        boxes = boxes + 1
+        boxRgb.append(look.fill)
+        return
+    }
+    fun text(face: int, t: string, start: int, end: int, x: f64, y: f64, look: Look, opacity: f64): void {
+        texts = texts + 1
+        said.append(t.slice(start, end))
+        textX.append(x)
+        textY.append(y)
+        return
+    }
+    fun image(handle: int, x: f64, y: f64, w: f64, h: f64, opacity: f64): void {
+        return
+    }
+    fun clipPush(x: f64, y: f64, w: f64, h: f64): void {
+        clips = clips + 1
+        return
+    }
+    fun clipPop(): void {
+        return
+    }
+}
+
+fun recorder(): Recorder = Recorder(0, 0, 0, [], [], [], [])
+
+fun said(r: Recorder, t: string): int {
+    for (i in 0 until r.said.size) if (r.said[i] == t) return i
+    -1
+}
+
+// ── components ───────────────────────────────────────────────────────────────
+
+class Model(var count: int by State(0), var itemsRev: int by State(0), var open: bool by State(true),
+            var volume: f64 by State(0.5), var shadows: bool by State(false), var tab: int by State(0), var presses: int by State(0))
+
+val model = Model()
+val modelItems: array<string> = []
+
+fun setItems(names: array<string>): void {
+    modelItems.clear()
+    for (n in names) modelItems.append(n)
+    model.itemsRev = model.itemsRev + 1
+    return
+}
+
+class Counter() : Component {
+    fun render(): El = column(style().padding(10.0).gap(4.0), [
+        text("count ${model.count}", style()).named("count"),
+        button("add", style(), { -> model.count = model.count + 1 }).named("add")
+    ])
+}
+
+class Items() : Component {
+    fun render(): El {
+        val rows: array<El> = []
+        val unusedRev = model.itemsRev
+        for (name in modelItems) rows.append(text(name, style()).keyed(name))
+        column(style().anchor(FLEX_ANCHOR_TOP_RIGHT, 10.0, 10.0), rows)
+    }
+}
+
+fun makeCounter(): Component = Counter()
+fun makeItems(): Component = Items()
+fun makeSettings(): Component = Settings()
+
+var counterRenders = 0
+var itemRenders = 0
+
+class Settings() : Component {
+    fun render(): El {
+        if (!model.open) return box(style().hidden(true), [])
+        windowPanel("Settings", { -> model.open = false }, style().width(300.0).anchor(FLEX_ANCHOR_CENTER, 0.0, 0.0), [
+            tabs(["Video", "Audio"], model.tab, style(), { i -> model.tab = i }).named("tabs"),
+            toggle("Shadows", model.shadows, style(), { on -> model.shadows = on }).named("shadows"),
+            slider(model.volume, 0.0, 1.0, style(), { v -> model.volume = v }).named("volume"),
+            button("Reset", style(), { -> model.presses = model.presses + 1 }).named("reset").tip("Back to the preset")
+        ])
+    }
+}
+
+fun frame(var t: ViewTree, var e: ViewInput, var r: Recorder): void {
+    t.input(e)
+    t.update(800.0, 600.0)
+    t.paint(r)
+    return
+}
+
+fun clearRec(var r: Recorder): void {
+    r.boxes = 0
+    r.texts = 0
+    r.clips = 0
+    r.said.clear()
+    r.textX.clear()
+    r.textY.clear()
+    r.boxRgb.clear()
+    return
+}
+
+fun counting(): void {
+    var t = viewTree(themeDefault(), Mono())
+    var r = recorder()
+    var e = viewInput()
+    val unusedCounter = t.mount(component("counter", makeCounter))
+    val unusedItems = t.mount(component("items", makeItems))
+    setItems(["a", "b", "c"])
+    frame(t, e, r)
+    check(said(r, "count 0") >= 0 && said(r, "add") >= 0, "a mounted component paints its text")
+    val count = t.named("count")
+    check(count >= 0 && near(t.ax[count], 10.0) && near(t.ay[count], 10.0), "the counter's text sits inside its padding")
+    val a = said(r, "a")
+    check(a >= 0 && near(r.textX[a], 800.0 - 10.0 - 8.0), "a top-right anchored column sits at the right edge")
+
+    // An unchanged frame: nothing rendered, laid out or resolved; the same paint.
+    val boxes = r.boxes
+    val texts = r.texts
+    t.renders = 0
+    t.layouts = 0
+    t.resolves = 0
+    t.flex.computed = 0
+    clearRec(r)
+    frame(t, e, r)
+    check(t.renders == 0 && t.layouts == 0 && t.resolves == 0 && t.flex.computed == 0, "an unchanged frame renders, lays out and resolves nothing")
+    check(r.boxes == boxes && r.texts == texts, "and paints the same")
+
+    // A State change re-renders only the component that read it.
+    var changes: array<int> = []
+    t.takeChanges(changes)
+    model.count = 1
+    t.renders = 0
+    clearRec(r)
+    frame(t, e, r)
+    check(t.renders == 1 && said(r, "count 1") >= 0, "a change re-renders the component that read it, only it")
+    t.takeChanges(changes)
+    var props = 0
+    var others = 0
+    var i = 0
+    while (i < changes.size) {
+        if (changes[i] == CH_PROPS) props = props + 1 else others = others + 1
+        i = i + 3
+    }
+    check(props == 1 && others == 0 && changes[1] == count, "the change set names the one node that changed")
+
+    // Keyed children: a reorder moves the same nodes.
+    val nodeA = t.flex.first[t.flex.next[t.flex.first[t.root]]]
+    setItems(["c", "a", "b"])
+    frame(t, e, r)
+    t.takeChanges(changes)
+    var adds = 0
+    var moves = 0
+    var removes = 0
+    i = 0
+    while (i < changes.size) {
+        if (changes[i] == CH_ADD) adds = adds + 1
+        if (changes[i] == CH_MOVE) moves = moves + 1
+        if (changes[i] == CH_REMOVE) removes = removes + 1
+        i = i + 3
+    }
+    check(adds == 0 && removes == 0 && moves >= 1, "a keyed reorder moves nodes, adds and removes none")
+    val itemsNode = t.flex.next[t.flex.first[t.root]]
+    check(t.flex.first[itemsNode] != nodeA && t.flex.next[t.flex.first[itemsNode]] == nodeA, "node 'a' is the same node, now second")
+    setItems(["c", "b"])
+    frame(t, e, r)
+    t.takeChanges(changes)
+    check(changes.size == 3 && changes[0] == CH_REMOVE && changes[1] == nodeA, "removing a keyed item removes its node and changes nothing else (${changes.size / 3} records)")
+
+    // Per-frame changes without a render.
+    t.renders = 0
+    t.setText(count, "count 99")
+    t.flex.computed = 0
+    frame(t, e, r)
+    check(t.renders == 0 && t.flex.computed > 0, "setText lays out again without a render")
+    t.flex.computed = 0
+    t.setTranslate(count, 5.0, 7.0)
+    clearRec(r)
+    frame(t, e, r)
+    check(t.flex.computed == 0 && near(t.ax[count], 15.0) && near(t.ay[count], 17.0), "setTranslate moves a node with no layout")
+
+    // Input: hover, press and release on the button.
+    val add = t.named("add")
+    e.x = t.ax[add] + 4.0
+    e.y = t.ay[add] + 4.0
+    e.time = 1.0
+    t.resolves = 0
+    frame(t, e, r)
+    check(t.hot == add && (t.own[add] & ON_HOVER) != 0, "the pointer over the button makes it hot")
+    check(t.resolves >= 1 && t.wantsPointer(), "hovering repaints its look, and the UI takes the pointer")
+    e.pressed = true
+    e.down = true
+    frame(t, e, r)
+    e.pressed = false
+    check((t.own[add] & ON_PRESSED) != 0 && model.count == 1, "pressed, not yet clicked")
+    e.down = false
+    e.released = true
+    frame(t, e, r)
+    e.released = false
+    check(model.count == 2, "released over it: clicked")
+    frame(t, e, r)
+    check(said(r, "count 2") >= 0, "the click's State change shows next frame")
+    e.x = -100.0
+    frame(t, e, r)
+    check(t.hot == -1 && !t.wantsPointer(), "off the UI, the world gets the pointer")
+    return
+}
+
+fun settings(): void {
+    var t = viewTree(themeDefault(), Mono())
+    var r = recorder()
+    var e = viewInput()
+    val unusedSettings = t.mount(component("settings", makeSettings))
+    frame(t, e, r)
+    frame(t, e, r)
+    check(said(r, "Settings") >= 0 && said(r, "Video") >= 0 && said(r, "Shadows") >= 0 && said(r, "Reset") >= 0, "the window shows its title and parts")
+    val volume = t.named("volume")
+    check(volume >= 0 && near(t.flex.w[volume], 300.0 - 32.0), "a slider fills the window's body")
+
+    // Drag the slider to three quarters.
+    e.x = t.ax[volume] + t.flex.w[volume] * 0.75
+    e.y = t.ay[volume] + 5.0
+    e.pressed = true
+    e.down = true
+    frame(t, e, r)
+    e.pressed = false
+    check(near(model.volume, 0.75), "pressing a slider sets its value (${model.volume})")
+    e.x = t.ax[volume] + t.flex.w[volume] * 0.25
+    frame(t, e, r)
+    check(near(model.volume, 0.25), "dragging follows the pointer")
+    e.down = false
+    e.released = true
+    frame(t, e, r)
+    e.released = false
+
+    // Toggle by click.
+    val shadows = t.named("shadows")
+    e.x = t.ax[shadows] + 5.0
+    e.y = t.ay[shadows] + 5.0
+    e.pressed = true
+    e.down = true
+    frame(t, e, r)
+    e.pressed = false
+    e.down = false
+    e.released = true
+    frame(t, e, r)
+    e.released = false
+    check(model.shadows, "clicking a toggle turns it on")
+    frame(t, e, r)
+    check((t.own[shadows] & ON_SELECTED) != 0, "and it shows as selected")
+
+    // Keyboard: Tab through, activate a tab, step the slider.
+    e.x = -100.0
+    e.nav = NAV_NEXT
+    frame(t, e, r)
+    check(t.focused >= 0 && t.focused == t.focusOrder[0], "Tab focuses the first focusable")
+    // The close button comes first; Down twice reaches the second tab.
+    e.nav = NAV_DOWN
+    frame(t, e, r)
+    frame(t, e, r)
+    e.nav = NAV_NONE
+    e.activate = true
+    frame(t, e, r)
+    e.activate = false
+    frame(t, e, r)
+    check(model.tab == 1, "Down then Enter picks the second tab (tab ${model.tab})")
+    // Focus the slider (after tabs ×2 and the toggle, the window's close button is first).
+    var guard = 0
+    while (t.focused != volume && guard < 10) {
+        e.nav = NAV_NEXT
+        frame(t, e, r)
+        guard = guard + 1
+    }
+    e.nav = NAV_NONE
+    e.right = true
+    frame(t, e, r)
+    e.right = false
+    check(near(model.volume, 0.30), "Right steps a focused slider by a twentieth (${model.volume})")
+    e.home = true
+    frame(t, e, r)
+    e.home = false
+    check(near(model.volume, 0.0), "Home jumps to the start")
+
+    // Tooltip after half a second on the button.
+    val reset = t.named("reset")
+    e.x = t.ax[reset] + 3.0
+    e.y = t.ay[reset] + 3.0
+    e.time = 10.0
+    frame(t, e, r)
+    e.time = 10.2
+    clearRec(r)
+    frame(t, e, r)
+    check(said(r, "Back to the preset") < 0, "no tooltip before half a second")
+    e.time = 10.6
+    clearRec(r)
+    frame(t, e, r)
+    clearRec(r)
+    frame(t, e, r)
+    check(said(r, "Back to the preset") >= 0, "the tooltip shows after half a second")
+
+    // Escape closes the topmost window.
+    e.cancel = true
+    frame(t, e, r)
+    e.cancel = false
+    check(!model.open && t.focused == -1, "Escape clears focus and closes the window")
+    clearRec(r)
+    frame(t, e, r)
+    check(said(r, "Settings") < 0, "a closed window isn't painted")
+    return
+}
+
+fun scrollingAndBreakpoints(): void {
+    var t = viewTree(themeDefault(), Mono())
+    var r = recorder()
+    var e = viewInput()
+    val rows: array<El> = []
+    for (i in 0 until 20) rows.append(text("row $i", style().height(20.0)))
+    val unusedList = t.mount(list(style().height(100.0).width(200.0), rows).named("list"))
+    val unusedCard = t.mount(box(style().anchor(FLEX_ANCHOR_BOTTOM_LEFT, 0.0, 0.0).width(400.0).upTo(500.0, style().width(200.0)), []).named("card"))
+    frame(t, e, r)
+    val l = t.named("list")
+    check(near(t.flex.h[l], 100.0) && t.flex.contentH[l] > 400.0, "a list keeps its height and scrolls its content")
+    check(said(r, "row 0") >= 0 && said(r, "row 19") < 0, "rows outside the view aren't painted")
+    e.x = 50.0
+    e.y = 50.0
+    e.wheelY = 100.0
+    frame(t, e, r)
+    e.wheelY = 0.0
+    clearRec(r)
+    frame(t, e, r)
+    check(near(t.sy[l], 100.0) && said(r, "row 0") < 0 && said(r, "row 5") >= 0, "the wheel scrolls the list under the pointer")
+    e.pressed = true
+    e.down = true
+    frame(t, e, r)
+    e.pressed = false
+    e.y = 20.0
+    frame(t, e, r)
+    check(near(t.sy[l], 130.0), "a drag scrolls it (${t.sy[l]})")
+    e.down = false
+    e.released = true
+    frame(t, e, r)
+    e.released = false
+
+    val card = t.named("card")
+    check(near(t.flex.w[card], 400.0), "at 800 wide the card is 400")
+    t.input(e)
+    t.update(480.0, 600.0)
+    t.paint(r)
+    check(near(t.flex.w[card], 200.0), "up to 500 wide the breakpoint makes it 200")
+    return
+}
+
+fun main: int {
+    counting()
+    settings()
+    scrollingAndBreakpoints()
+    println("tree: $passed passed, $failed failed")
+    if (failed == 0) 0 else 1
+}

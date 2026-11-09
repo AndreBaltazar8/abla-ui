@@ -37,9 +37,10 @@ fun expectBox(t: FlexTree, n: int, x: f64, y: f64, w: f64, h: f64, name: string)
 
 /** A monospace font: 10 px a byte, 20 px lines. */
 class MonoFont(val advance: f64) : TextFont {
-    fun width(text: string, start: int, end: int): f64 = f64FromInt(end - start) * advance
+    fun face(family: string, size: f64, weight: int): int = 0
+    fun width(face: int, text: string, start: int, end: int): f64 = f64FromInt(end - start) * advance
     fun clusterEnd(text: string, i: int): int = textCodePointEnd(text, i)
-    fun lineHeight(): f64 = 20.0
+    fun lineHeight(face: int): f64 = 20.0
 }
 
 /** Measures text leaves (their text by node index) with MonoFont, wrapped. */
@@ -47,8 +48,8 @@ class TextMeasure(val texts: Map<int, string>, var font: MonoFont, var lines: Te
     fun measure(node: int, maxWidth: f64, maxHeight: f64): FlexSize {
         calls = calls + 1
         val text = texts.get(node) ?? ""
-        textWrap(text, maxWidth, 0, font, lines)
-        FlexSize(lines.widest, f64FromInt(lines.starts.size) * font.lineHeight())
+        textWrap(text, 0, maxWidth, 0, font, lines)
+        FlexSize(lines.widest, f64FromInt(lines.starts.size) * font.lineHeight(0))
     }
 }
 
@@ -187,18 +188,18 @@ fun wrapping(): void {
 fun text(): void {
     var font = MonoFont(10.0)
     var lines = textLines()
-    textWrap("hello big world", 100.0, 0, font, lines)
+    textWrap("hello big world", 0, 100.0, 0, font, lines)
     check(lines.starts.size == 2 && lines.ends[0] == 9 && lines.starts[1] == 10, "wraps at the last space that fits")
     check(near(lines.widths[0], 90.0) && near(lines.widest, 90.0), "a line's trailing space doesn't count")
-    textWrap("abcdefghijkl", 50.0, 0, font, lines)
+    textWrap("abcdefghijkl", 0, 50.0, 0, font, lines)
     check(lines.starts.size == 3 && lines.ends[0] == 5 && lines.ends[2] == 12, "a word wider than the line breaks inside")
-    textWrap("one\ntwo", 500.0, 0, font, lines)
+    textWrap("one\ntwo", 0, 500.0, 0, font, lines)
     check(lines.starts.size == 2 && lines.starts[1] == 4, "a newline always breaks")
-    textWrap("aa bb cc dd", 20.0, 2, font, lines)
+    textWrap("aa bb cc dd", 0, 20.0, 2, font, lines)
     check(lines.starts.size == 2 && lines.cut, "maxLines drops the rest and says so")
-    textWrap("", 100.0, 0, font, lines)
+    textWrap("", 0, 100.0, 0, font, lines)
     check(lines.starts.size == 1 && near(lines.widest, 0.0), "empty text is one empty line")
-    textWrap("ação", 100.0, 0, font, lines)
+    textWrap("ação", 0, 100.0, 0, font, lines)
     check(lines.ends[0] == 6, "multi-byte characters stay whole")
 
     // Text in a layout: a column 100 wide wraps it.

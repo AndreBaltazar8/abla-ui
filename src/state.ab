@@ -13,8 +13,10 @@
 //   settings.^volume.version            // how many times volume changed
 //   settings.^volume.peek()             // read without subscribing
 //
-// Writes that keep the value (`==`) change nothing. A value changed in place (an element
-// appended to an array held in State) isn't seen: call `touch()` on its State.
+// Writes that keep the value (`==`) change nothing. State holds plain values (numbers,
+// booleans, strings); keep a collection beside a State that counts its changes
+// (`var itemsChanged by State(0)`, bumped after each edit) and read that State where the
+// collection is rendered.
 
 var stateRevisionCount = 0
 

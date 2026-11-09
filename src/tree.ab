@@ -1,0 +1,811 @@
+// The retained tree: what components render (elements, `El`) is reconciled by key into
+// nodes that persist between renders. A node keeps its layout (flex.ab), its resolved
+// look and its wrapped text, so a frame where nothing changed lays out nothing, measures
+// nothing and resolves nothing: painting it is one walk handing the cached boxes and
+// text runs to a renderer (`ViewPainter`).
+//
+//   class Hud(var fps: State<int> ...) : Component {
+//       fun render(): El = column(style().padding(8.0), [text("${fps} fps", style())])
+//   }
+//   val tree = viewTree(theme, platformText)
+//   tree.mount(component("hud", { -> Hud() }))
+//   each frame:
+//       tree.input(events)          // hit testing, hover, press, focus, scrolling (input.ab)
+//       tree.update(width, height)  // re-render what read a changed State, lay out what changed
+//       tree.paint(painter)         // draw
+//
+// What changes between frames without a render goes through a node directly, found by
+// the name given to an element (`.named("fps")`, then `tree.named("fps")`): `setText`, `setTranslate`, `setOpacity`, `setValue`. Each
+// marks only what it affects (a new text lays out again, a translation doesn't).
+//
+// Reconciliation records what changed per node (`changes`: added, removed, moved,
+// properties), for renderers that keep their own retained objects.
+
+import "abla/float"
+import "abla/math"
+import "./flex.ab"
+import "./text.ab"
+import "./state.ab"
+import "./style.ab"
+
+val EL_BOX = 0
+val EL_TEXT = 1
+val EL_IMAGE = 2
+val EL_COMPONENT = 3
+
+val ROLE_NONE = 0
+val ROLE_PRESS = 1   // a button, toggle, tab or list row: onPress on a click, Enter, Space or A
+val ROLE_SLIDER = 2  // onValue while dragged or stepped with Left / Right
+val ROLE_WINDOW = 3  // onPress when Escape (or B) closes it as the topmost window
+
+// Change records (op, node, extra).
+val CH_ADD = 1      // extra: the parent
+val CH_REMOVE = 2
+val CH_MOVE = 3     // extra: the new index among its siblings
+val CH_PROPS = 4
+
+/** A component: it renders an element tree from its state. */
+interface Component {
+    fun render(): El
+}
+
+fun elNothing(): void {
+    return
+}
+
+fun elNoValue(v: f64): void {
+    return
+}
+
+/** A description of a node, made by render() and compared with what is there. */
+class El(
+    val kind: int, val key: string, val style: Style, val text: string, val children: array<El>,
+    val role: int, val value: f64, val lo: f64, val hi: f64, val step: f64,
+    val selected: bool, val disabled: bool,
+    val onPress: () -> void, val onValue: (f64) -> void,
+    val tooltip: string, val image: int, val type: string,
+    val make: (() -> Component)?, val name: string
+)
+
+fun elMake(kind: int, s: Style, text: string, children: array<El>): El =
+    El(kind, "", s, text, children, ROLE_NONE, 0.0, 0.0, 1.0, 0.0, false, false, elNothing, elNoValue, "", 0, "", null, "")
+
+/** A box laid out by its style (a column unless the style says otherwise). */
+fun box(s: Style, children: array<El>): El = elMake(EL_BOX, s, "", children)
+fun row(s: Style, children: array<El>): El = elMake(EL_BOX, style().row().with(s), "", children)
+fun column(s: Style, children: array<El>): El = elMake(EL_BOX, style().column().with(s), "", children)
+fun stack(s: Style, children: array<El>): El = elMake(EL_BOX, style().stack().with(s), "", children)
+fun text(t: string, s: Style): El = elMake(EL_TEXT, s, t, [])
+/** An image (the renderer's handle) sized by its style. */
+fun image(handle: int, s: Style): El =
+    El(EL_IMAGE, "", s, "", [], ROLE_NONE, 0.0, 0.0, 1.0, 0.0, false, false, elNothing, elNoValue, "", handle, "", null, "")
+fun spacer(): El = elMake(EL_BOX, style().grow(1.0), "", [])
+/** A component of type `type`, made by `make` the first time it is reconciled at its place. */
+fun component(type: string, make: () -> Component): El =
+    El(EL_COMPONENT, type, style(), "", [], ROLE_NONE, 0.0, 0.0, 1.0, 0.0, false, false, elNothing, elNoValue, "", 0, type, make, "")
+
+// Modifiers: each returns a new element.
+fun El.keyed(k: string): El = El(this.kind, k, this.style, this.text, this.children, this.role, this.value, this.lo, this.hi, this.step, this.selected, this.disabled, this.onPress, this.onValue, this.tooltip, this.image, this.type, this.make, this.name)
+fun El.styled(s: Style): El = El(this.kind, this.key, this.style.with(s), this.text, this.children, this.role, this.value, this.lo, this.hi, this.step, this.selected, this.disabled, this.onPress, this.onValue, this.tooltip, this.image, this.type, this.make, this.name)
+/** Pressable: a click (released over it), Enter, Space or A while focused calls `f`. */
+fun El.pressable(f: () -> void): El = El(this.kind, this.key, this.style, this.text, this.children, ROLE_PRESS, this.value, this.lo, this.hi, this.step, this.selected, this.disabled, f, this.onValue, this.tooltip, this.image, this.type, this.make, this.name)
+/** A slider over [lo, hi] at `value`; `f` gets each new value (`step` 0: a twentieth of the range per key). */
+fun El.slider(value: f64, lo: f64, hi: f64, step: f64, f: (f64) -> void): El = El(this.kind, this.key, this.style, this.text, this.children, ROLE_SLIDER, value, lo, hi, step, this.selected, this.disabled, this.onPress, f, this.tooltip, this.image, this.type, this.make, this.name)
+/** A window: Escape (or B) closes it when it is the topmost, calling `f`. */
+fun El.closable(f: () -> void): El = El(this.kind, this.key, this.style, this.text, this.children, ROLE_WINDOW, this.value, this.lo, this.hi, this.step, this.selected, this.disabled, f, this.onValue, this.tooltip, this.image, this.type, this.make, this.name)
+fun El.selectedIf(on: bool): El = El(this.kind, this.key, this.style, this.text, this.children, this.role, this.value, this.lo, this.hi, this.step, on, this.disabled, this.onPress, this.onValue, this.tooltip, this.image, this.type, this.make, this.name)
+fun El.disabledIf(on: bool): El = El(this.kind, this.key, this.style, this.text, this.children, this.role, this.value, this.lo, this.hi, this.step, this.selected, on, this.onPress, this.onValue, this.tooltip, this.image, this.type, this.make, this.name)
+/** Show `t` by the pointer once it has rested on this element half a second. */
+fun El.tip(t: string): El = El(this.kind, this.key, this.style, this.text, this.children, this.role, this.value, this.lo, this.hi, this.step, this.selected, this.disabled, this.onPress, this.onValue, t, this.image, this.type, this.make, this.name)
+/** Name the node this element becomes, to reach it later with `ViewTree.named` (setText, setTranslate…). */
+fun El.named(n: string): El = El(this.kind, this.key, this.style, this.text, this.children, this.role, this.value, this.lo, this.hi, this.step, this.selected, this.disabled, this.onPress, this.onValue, this.tooltip, this.image, this.type, this.make, n)
+
+/** Draws the tree. Positions are absolute logical px; colours 0xRRGGBB with an alpha. */
+interface ViewPainter {
+    /** A box in `look` (its fill, border, corners, glow, shadow), at `opacity`. */
+    fun box(x: f64, y: f64, w: f64, h: f64, look: Look, opacity: f64): void
+    /** Bytes [start, end) of `text` in `face`, the line's top-left at (x, y), in `look`'s text colour and effect. */
+    fun text(face: int, text: string, start: int, end: int, x: f64, y: f64, look: Look, opacity: f64): void
+    fun image(handle: int, x: f64, y: f64, w: f64, h: f64, opacity: f64): void
+    /** Clip what follows to a rect (inside any clip already pushed) until clipPop. */
+    fun clipPush(x: f64, y: f64, w: f64, h: f64): void
+    fun clipPop(): void
+}
+
+/** Text nodes' strings, fonts and wrapped lines; it measures them for the layout. */
+class ViewTexts(
+    var font: TextFont,
+    val text: array<string>, val face: array<int>, val lineH: array<f64>, val maxLines: array<int>,
+    val lines: array<TextLines>, val size: FlexSize
+) : FlexMeasure {
+    fun measure(node: int, maxWidth: f64, maxHeight: f64): FlexSize {
+        textWrap(text[node], face[node], maxWidth, maxLines[node], font, lines[node])
+        FlexSize(lines[node].widest, f64FromInt(lines[node].starts.size) * lineH[node])
+    }
+}
+
+// Interaction states a node has itself (ON_* bits); selected and disabled come from its element.
+class ViewTree(
+    var flex: FlexTree,
+    var texts: ViewTexts,
+    var theme: Theme,
+    val kind: array<int> = [], val key: array<string> = [], val type: array<string> = [], val style: array<Style> = [],
+    val role: array<int> = [], val value: array<f64> = [], val lo: array<f64> = [], val hi: array<f64> = [], val step: array<f64> = [],
+    val own: array<int> = [],          // ON_SELECTED / ON_DISABLED from the element, ON_HOVER / PRESSED / FOCUSED from input
+    val press: array<() -> void> = [], val change: array<(f64) -> void> = [],
+    val tooltip: array<string> = [], val image: array<int> = [],
+    val comp: array<Component?> = [],
+    val fontSize: array<f64> = [], val fontWeight: array<int> = [], val fontFamily: array<int> = [],
+    val looks: array<Look> = [], val lookStates: array<int> = [], val lookInk: array<int> = [], val lookInkA: array<f64> = [], val lookValid: array<bool> = [],
+    val ax: array<f64> = [], val ay: array<f64> = [],       // absolute position, as last painted
+    val sx: array<f64> = [], val sy: array<f64> = [],       // scroll offsets
+    val tx: array<f64> = [], val ty: array<f64> = [], val alpha: array<f64> = [], // per-frame translation and opacity
+    var root: int = -1, var width: f64 = 0.0, var height: f64 = 0.0,
+    val changes: array<int> = [],
+    val names: Map<string, int> = Map(),
+    val rendered: array<int> = [], var renderPass: int = 0, val renderedIn: array<int> = [],
+    // Input (input.ab): hit regions from the last paint, in drawing order, with their clips.
+    val hitNode: array<int> = [], val hitRect: array<f64> = [],
+    val focusOrder: array<int> = [], val windows: array<int> = [], val scrollers: array<int> = [],
+    var hot: int = -1, var active: int = -1, var focused: int = -1, var overUi: bool = false, var navigating: bool = false,
+    var hotSince: f64 = 0.0, var tipCandidate: int = -1, var tipNode: int = -1, var tipX: f64 = 0.0, var tipY: f64 = 0.0, var now: f64 = 0.0,
+    var dragScroll: int = -1, var dragGrab: f64 = 0.0, var pressX: f64 = 0.0, var pressY: f64 = 0.0,
+    var layouts: int = 0, var renders: int = 0, var resolves: int = 0
+)
+
+fun viewTree(theme: Theme, font: TextFont): ViewTree {
+    var t = ViewTree(flexTree(), ViewTexts(font, [], [], [], [], [], FlexSize(0.0, 0.0)), theme)
+
+    val r = t.newNode(-1)
+    t.root = r
+    t.flex.setDir(r, FLEX_STACK)
+    t.flex.setWidth(r, FLEX_FILL, 0.0)
+    t.flex.setHeight(r, FLEX_FILL, 0.0)
+    t.flex.setAlign(r, FLEX_START, FLEX_START)
+    t
+}
+
+/** A node slot (new or reused), its columns reset; under `parent` before `before` (-1: last). */
+fun ViewTree.newNode(parent: int): int {
+    val n = this.flex.add(parent)
+    while (this.kind.size <= n) {
+        this.kind.append(0)
+        this.key.append("")
+        this.type.append("")
+        this.style.append(style())
+        this.role.append(0)
+        this.value.append(0.0)
+        this.lo.append(0.0)
+        this.hi.append(1.0)
+        this.step.append(0.0)
+        this.own.append(0)
+        this.press.append(elNothing)
+        this.change.append(elNoValue)
+        this.tooltip.append("")
+        this.image.append(0)
+        this.comp.append(null)
+        this.fontSize.append(0.0)
+        this.fontWeight.append(0)
+        this.fontFamily.append(0)
+        this.looks.append(look())
+        this.lookStates.append(0)
+        this.lookInk.append(0)
+        this.lookInkA.append(0.0)
+        this.lookValid.append(false)
+        this.ax.append(0.0)
+        this.ay.append(0.0)
+        this.sx.append(0.0)
+        this.sy.append(0.0)
+        this.tx.append(0.0)
+        this.ty.append(0.0)
+        this.alpha.append(1.0)
+        this.renderedIn.append(-1)
+        this.texts.text.append("")
+        this.texts.face.append(0)
+        this.texts.lineH.append(0.0)
+        this.texts.maxLines.append(0)
+        this.texts.lines.append(textLines())
+    }
+    this.kind[n] = EL_BOX
+    this.key[n] = ""
+    this.type[n] = ""
+    this.style[n] = style()
+    this.role[n] = ROLE_NONE
+    this.value[n] = 0.0
+    this.own[n] = 0
+    this.press[n] = elNothing
+    this.change[n] = elNoValue
+    this.tooltip[n] = ""
+    this.image[n] = 0
+    this.comp[n] = null
+    this.lookValid[n] = false
+    this.sx[n] = 0.0
+    this.sy[n] = 0.0
+    this.tx[n] = 0.0
+    this.ty[n] = 0.0
+    this.alpha[n] = 1.0
+    this.renderedIn[n] = -1
+    this.texts.text[n] = ""
+    this.texts.maxLines[n] = 0
+    n
+}
+
+fun ViewTree.record(op: int, n: int, extra: int): void {
+    this.changes.append(op)
+    this.changes.append(n)
+    this.changes.append(extra)
+    return
+}
+
+/** Mount a component (or any element) at the top level, drawn over what was mounted before. */
+fun ViewTree.mount(el: El): int {
+    val n = this.newNode(this.root)
+    this.record(CH_ADD, n, this.root)
+    this.reconcile(n, el)
+    n
+}
+
+/** Remove a mounted node and everything under it. */
+fun ViewTree.unmount(n: int): void {
+    this.forget(n)
+    this.flex.remove(n)
+    return
+}
+
+/** A subtree going away: its components stop being rendered, refs and input let go. */
+fun ViewTree.forget(n: int): void {
+    var c = this.flex.first[n]
+    while (c >= 0) {
+        this.forget(c)
+        c = this.flex.next[c]
+    }
+    this.comp[n] = null
+    this.renderedIn[n] = -1
+    if (this.hot == n) this.hot = -1
+    if (this.active == n) this.active = -1
+    if (this.focused == n) this.focused = -1
+    if (this.tipNode == n) this.tipNode = -1
+    this.record(CH_REMOVE, n, 0)
+    return
+}
+
+// ── reconciliation ───────────────────────────────────────────────────────────
+
+/** Make node `n` what `el` describes (its children too); a component renders into it. */
+fun ViewTree.reconcile(n: int, el: El): void {
+    if (el.kind == EL_COMPONENT) {
+        this.type[n] = el.type
+        this.key[n] = el.key
+        if (this.comp[n] == null) {
+            val make = el.make
+            if (make != null) this.comp[n] = make()
+        }
+        this.renderComponent(n)
+        return
+    }
+    this.setProps(n, el)
+    this.reconcileChildren(n, el.children)
+    return
+}
+
+/** Render component node `n` again (its reads subscribe it) and reconcile what it gives. */
+fun ViewTree.renderComponent(n: int): void {
+    val c = this.comp[n]
+    if (c == null) return
+    this.renders = this.renders + 1
+    this.renderedIn[n] = this.renderPass
+    val previous = stateRead(n)
+    val out = c.render()
+    stateReadEnd(previous)
+    if (out.kind == EL_COMPONENT) {
+        // A component rendering a component directly: the inner one gets a node of its own.
+        this.setProps(n, box(style(), []))
+        this.reconcileChildren(n, [out])
+        return
+    }
+    this.setProps(n, out)
+    this.reconcileChildren(n, out.children)
+    return
+}
+
+fun ViewTree.layoutProp(s: Style, prop: int, fallback: f64): f64 = s.get(prop, 0, this.width, fallback)
+
+/** Copy an element's properties onto node `n`, marking only what changed. */
+fun ViewTree.setProps(n: int, el: El): void {
+    var changed = false
+    if (this.kind[n] != el.kind) {
+        this.kind[n] = el.kind
+        changed = true
+    }
+    if (!this.style[n].same(el.style)) {
+        this.style[n] = el.style
+        this.applyLayout(n)
+        this.lookValid[n] = false
+        changed = true
+    }
+    if (el.kind == EL_TEXT && this.texts.text[n] != el.text) {
+        this.texts.text[n] = el.text
+        this.flex.remeasure(n)
+        changed = true
+    }
+    if (this.flex.has(n, FLEX_F_MEASURED) != (el.kind == EL_TEXT)) this.flex.setMeasured(n, el.kind == EL_TEXT)
+    if (el.kind == EL_TEXT) this.applyFont(n)
+    val states = (if (el.selected) ON_SELECTED else 0) | (if (el.disabled) ON_DISABLED else 0)
+    if ((this.own[n] & (ON_SELECTED | ON_DISABLED)) != states) {
+        this.own[n] = (this.own[n] & (0 - 1 - ON_SELECTED - ON_DISABLED)) | states
+        changed = true
+    }
+    if (this.role[n] != el.role || this.value[n] != el.value || this.lo[n] != el.lo || this.hi[n] != el.hi || this.step[n] != el.step) {
+        this.role[n] = el.role
+        this.value[n] = el.value
+        this.lo[n] = el.lo
+        this.hi[n] = el.hi
+        this.step[n] = el.step
+        changed = true
+    }
+    if (this.tooltip[n] != el.tooltip || this.image[n] != el.image) {
+        this.tooltip[n] = el.tooltip
+        this.image[n] = el.image
+        changed = true
+    }
+    this.key[n] = el.key
+    this.press[n] = el.onPress
+    this.change[n] = el.onValue
+    if (el.name != "") this.names.set(el.name, n)
+    if (changed) this.record(CH_PROPS, n, 0)
+    return
+}
+
+/** The style's layout properties onto the flex node (each setter marks only a real change). */
+fun ViewTree.applyLayout(n: int): void {
+    val s = this.style[n]
+    this.flex.setDir(n, f64ToInt(this.layoutProp(s, P_DIR, 0.0)))
+    this.flex.setWrap(n, this.layoutProp(s, P_WRAP, 0.0) != 0.0)
+    this.flex.setGaps(n, this.layoutProp(s, P_GAP, 0.0), this.layoutProp(s, P_CROSS_GAP, this.layoutProp(s, P_GAP, 0.0)))
+    this.flex.setPadding(n, this.layoutProp(s, P_PAD_L, 0.0), this.layoutProp(s, P_PAD_T, 0.0), this.layoutProp(s, P_PAD_R, 0.0), this.layoutProp(s, P_PAD_B, 0.0))
+    val w = this.layoutProp(s, P_WIDTH, SIZE_CONTENT)
+    val h = this.layoutProp(s, P_HEIGHT, SIZE_CONTENT)
+    this.flex.setWidth(n, if (w == SIZE_FILL) FLEX_FILL else if (w < 0.0) FLEX_CONTENT else FLEX_FIXED, fmax(w, 0.0))
+    this.flex.setHeight(n, if (h == SIZE_FILL) FLEX_FILL else if (h < 0.0) FLEX_CONTENT else FLEX_FIXED, fmax(h, 0.0))
+    this.flex.setMinMax(n, this.layoutProp(s, P_MIN_W, 0.0), this.layoutProp(s, P_MAX_W, FLEX_INF), this.layoutProp(s, P_MIN_H, 0.0), this.layoutProp(s, P_MAX_H, FLEX_INF))
+    this.flex.setFlex(n, this.layoutProp(s, P_GROW, 0.0), this.layoutProp(s, P_SHRINK, 1.0))
+    this.flex.setAlign(n, f64ToInt(this.layoutProp(s, P_ALIGN, f64FromInt(FLEX_STRETCH))), f64ToInt(this.layoutProp(s, P_JUSTIFY, f64FromInt(FLEX_START))))
+    this.flex.setAlignSelf(n, f64ToInt(this.layoutProp(s, P_ALIGN_SELF, 0.0)))
+    val sc = f64ToInt(this.layoutProp(s, P_SCROLL, 0.0))
+    this.flex.setScroll(n, (sc & SCROLL_X) != 0, (sc & SCROLL_Y) != 0)
+    val anchor = f64ToInt(this.layoutProp(s, P_ANCHOR, -1.0))
+    if (anchor >= 0) this.flex.setAbsolute(n, anchor, this.layoutProp(s, P_OFF_X, 0.0), this.layoutProp(s, P_OFF_Y, 0.0))
+    else this.flex.setFlag(n, FLEX_F_ABSOLUTE, false)
+    this.flex.setHidden(n, this.layoutProp(s, P_HIDDEN, 0.0) != 0.0)
+    return
+}
+
+/** A text node's font: its style's, else its parent's (fonts inherit, as in CSS). */
+fun ViewTree.applyFont(n: int): void {
+    val s = this.style[n]
+    val p = this.flex.parent[n]
+    val inheritSize = if (p >= 0 && this.fontSize[p] > 0.0) this.fontSize[p] else this.theme.fontSize
+    val inheritWeight = if (p >= 0 && this.fontWeight[p] > 0) this.fontWeight[p] else this.theme.fontWeight
+    val inheritFamily = if (p >= 0) this.fontFamily[p] else 0
+    val size = this.layoutProp(s, P_FONT_SIZE, inheritSize)
+    val weight = f64ToInt(this.layoutProp(s, P_FONT_WEIGHT, f64FromInt(inheritWeight)))
+    val family = f64ToInt(this.layoutProp(s, P_FONT_FAMILY, f64FromInt(inheritFamily)))
+    val maxLines = f64ToInt(this.layoutProp(s, P_MAX_LINES, 0.0))
+    if (size == this.fontSize[n] && weight == this.fontWeight[n] && family == this.fontFamily[n] && maxLines == this.texts.maxLines[n] && this.texts.lineH[n] > 0.0) return
+    this.fontSize[n] = size
+    this.fontWeight[n] = weight
+    this.fontFamily[n] = family
+    this.texts.maxLines[n] = maxLines
+    val families = this.theme.families
+    val name = if (family >= 0 && family < families.size) families[family] else families[0]
+    val face = this.texts.font.face(name, size, weight)
+    this.texts.face[n] = face
+    val lh = this.layoutProp(s, P_LINE_HEIGHT, 0.0)
+    this.texts.lineH[n] = if (lh > 0.0) lh else this.texts.font.lineHeight(face)
+    this.flex.remeasure(n)
+    return
+}
+
+/** Box nodes carry their font for their text children to inherit. */
+fun ViewTree.applyBoxFont(n: int): void {
+    val s = this.style[n]
+    val p = this.flex.parent[n]
+    this.fontSize[n] = this.layoutProp(s, P_FONT_SIZE, if (p >= 0) this.fontSize[p] else 0.0)
+    this.fontWeight[n] = f64ToInt(this.layoutProp(s, P_FONT_WEIGHT, f64FromInt(if (p >= 0) this.fontWeight[p] else 0)))
+    this.fontFamily[n] = f64ToInt(this.layoutProp(s, P_FONT_FAMILY, f64FromInt(if (p >= 0) this.fontFamily[p] else 0)))
+    return
+}
+
+/** An element's identity among its siblings: its key, else its place. */
+fun elIdentity(el: El, index: int): string = if (el.key != "") el.key else "#$index"
+
+/** Reconcile `n`'s children with `els`: same identity (and kind / component type) keeps a node. */
+fun ViewTree.reconcileChildren(n: int, els: array<El>): void {
+    if (this.kind[n] != EL_TEXT) this.applyBoxFont(n)
+    // The current children and their identities.
+    val old: array<int> = []
+    var c = this.flex.first[n]
+    while (c >= 0) {
+        old.append(c)
+        c = this.flex.next[c]
+    }
+    val oldId: array<string> = []
+    for (i in 0 until old.size) oldId.append(this.identityOf(old[i], i))
+    val taken: array<bool> = []
+    for (i in 0 until old.size) taken.append(false)
+    val placed: array<int> = []
+    for (i in 0 until els.size) {
+        val el = els[i]
+        val id = elIdentity(el, i)
+        var found = -1
+        // Same position first (the common case), then a search.
+        if (i < old.size && !taken[i] && oldId[i] == id && this.sameKind(old[i], el)) found = i
+        else {
+            for (j in 0 until old.size) {
+                if (found < 0 && !taken[j] && oldId[j] == id && this.sameKind(old[j], el)) found = j
+            }
+        }
+        if (found >= 0) {
+            taken[found] = true
+            placed.append(old[found])
+        } else placed.append(-1)
+    }
+    // Remove what isn't kept.
+    for (j in 0 until old.size) {
+        if (!taken[j]) {
+            this.forget(old[j])
+            this.flex.remove(old[j])
+        }
+    }
+    // Put kept and new nodes in order, then reconcile each.
+    var expect = this.flex.first[n]
+    for (i in 0 until els.size) {
+        var node = placed[i]
+        if (node < 0) {
+            node = this.newNode(-1)
+            this.flex.attach(node, n, expect)
+            this.record(CH_ADD, node, n)
+            if (els[i].kind == EL_COMPONENT) this.key[node] = els[i].key
+        } else if (node != expect) {
+            this.flex.moveBefore(node, expect)
+            this.record(CH_MOVE, node, i)
+        } else expect = this.flex.next[expect]
+        // Keyed nodes remember their key; unkeyed ones their place.
+        this.key[node] = els[i].key
+        this.reconcileChild(node, els[i])
+    }
+    return
+}
+
+fun ViewTree.reconcileChild(node: int, el: El): void {
+    if (el.kind == EL_COMPONENT) {
+        this.type[node] = el.type
+        if (this.comp[node] == null) {
+            val make = el.make
+            if (make != null) this.comp[node] = make()
+        }
+        // Rendered again with its parent (it may read what the parent passed it), once a pass.
+        if (this.renderedIn[node] != this.renderPass) this.renderComponent(node)
+        return
+    }
+    this.type[node] = ""
+    this.setProps(node, el)
+    this.reconcileChildren(node, el.children)
+    return
+}
+
+fun ViewTree.identityOf(node: int, index: int): string = if (this.key[node] != "") this.key[node] else "#$index"
+
+fun ViewTree.sameKind(node: int, el: El): bool =
+    if (el.kind == EL_COMPONENT) this.comp[node] != null && this.type[node] == el.type
+    else this.comp[node] == null
+
+// ── frames ───────────────────────────────────────────────────────────────────
+
+/**
+ * Re-render the components that read a State changed since the last update (parents
+ * before children, each once), then lay out what changed in a `width` × `height` viewport.
+ */
+fun ViewTree.update(width: f64, height: f64): void {
+    if (width != this.width) {
+        val before = this.width
+        this.width = width
+        // Breakpoint styles may now resolve differently.
+        this.rebreak(this.root, before)
+    }
+    this.height = height
+    if (stateHasChanges()) {
+        this.renderPass = this.renderPass + 1
+        stateTakeChanged(this.rendered)
+        // Shallowest first: a parent's render renders its child components with it.
+        var pending = this.rendered.size
+        while (pending > 0) {
+            var best = -1
+            var bestDepth = 1000000
+            for (i in 0 until this.rendered.size) {
+                val s = this.rendered[i]
+                if (s >= 0) {
+                    val d = this.depthOf(s)
+                    if (d < bestDepth) {
+                        best = i
+                        bestDepth = d
+                    }
+                }
+            }
+            val s = this.rendered[best]
+            this.rendered[best] = -1
+            pending = pending - 1
+            if (s < this.comp.size && this.comp[s] != null && this.renderedIn[s] != this.renderPass && this.flex.has(s, FLEX_F_LIVE)) this.renderComponent(s)
+        }
+    }
+    if (this.flex.needsLayout(this.root)) {
+        this.layouts = this.layouts + 1
+        this.flex.layout(this.root, width, height, this.texts)
+    }
+    return
+}
+
+fun ViewTree.depthOf(n: int): int {
+    var d = 0
+    var at = n
+    while (at >= 0) {
+        d = d + 1
+        at = this.flex.parent[at]
+    }
+    d
+}
+
+fun ViewTree.rebreak(n: int, before: f64): void {
+    if (this.style[n].hasBreakpoints()) {
+        this.applyLayout(n)
+        if (this.kind[n] == EL_TEXT) this.applyFont(n)
+        this.lookValid[n] = false
+    }
+    var c = this.flex.first[n]
+    while (c >= 0) {
+        this.rebreak(c, before)
+        c = this.flex.next[c]
+    }
+    return
+}
+
+/** Hand the recorded changes (op, node, extra triples) to `into` and forget them. */
+fun ViewTree.takeChanges(var into: array<int>): void {
+    into.clear()
+    for (v in this.changes) into.append(v)
+    this.changes.clear()
+    return
+}
+
+// ── per-frame changes without a render ───────────────────────────────────────
+
+/** The node an element named `n` became (`El.named`), or -1. */
+fun ViewTree.named(n: string): int {
+    val at = this.names.get(n) ?? -1
+    if (at >= 0 && this.flex.has(at, FLEX_F_LIVE)) at else -1
+}
+
+/** A text node's text; lays it out again only when it differs. */
+fun ViewTree.setText(n: int, t: string): void {
+    if (n < 0 || this.texts.text[n] == t) return
+    this.texts.text[n] = t
+    this.flex.remeasure(n)
+    this.record(CH_PROPS, n, 0)
+    return
+}
+
+/** Move a node (and what it holds) by (dx, dy) from where the layout put it: no layout. */
+fun ViewTree.setTranslate(n: int, dx: f64, dy: f64): void {
+    if (n < 0) return
+    this.tx[n] = dx
+    this.ty[n] = dy
+    return
+}
+
+/** A node's opacity on top of its style's: no layout, no look. */
+fun ViewTree.setOpacity(n: int, a: f64): void {
+    if (n < 0) return
+    this.alpha[n] = a
+    return
+}
+
+/** A slider's value (its look follows at the next paint). */
+fun ViewTree.setValue(n: int, v: f64): void {
+    if (n < 0) return
+    this.value[n] = v
+    return
+}
+
+/** Hide or show a node without a render (it leaves the layout). */
+fun ViewTree.setHidden(n: int, hidden: bool): void {
+    if (n < 0) return
+    this.flex.setHidden(n, hidden)
+    return
+}
+
+// ── painting ─────────────────────────────────────────────────────────────────
+
+/** Bring the node's look up to date for its states now: kept unless its states, text colour or style changed. */
+fun ViewTree.resolveLook(n: int, states: int, ink: int, inkA: f64): void {
+    if (!this.lookValid[n] || this.lookStates[n] != states || this.lookInk[n] != ink || this.lookInkA[n] != inkA) {
+        lookResolve(this.style[n], states, this.width, ink, inkA, this.looks[n])
+        this.lookStates[n] = states
+        this.lookInk[n] = ink
+        this.lookInkA[n] = inkA
+        this.lookValid[n] = true
+        this.resolves = this.resolves + 1
+    }
+    return
+}
+
+/** Paint the tree. Hit regions, focus order and windows are collected for the next input. */
+fun ViewTree.paint(var painter: ViewPainter): void {
+    this.hitNode.clear()
+    this.hitRect.clear()
+    this.focusOrder.clear()
+    this.windows.clear()
+    this.scrollers.clear()
+    this.paintNode(this.root, 0.0, 0.0, 0, this.theme.text, this.theme.textA, 1.0, -1.0e9, -1.0e9, 1.0e9, 1.0e9, painter)
+    if (this.focused >= 0) {
+        val f = this.focused
+        val g = this.theme.ringGap
+        val ring = this.ringLook()
+        painter.box(this.ax[f] - g, this.ay[f] - g, this.flex.w[f] + g * 2.0, this.flex.h[f] + g * 2.0, ring, 1.0)
+    }
+    this.paintTooltip(painter)
+    return
+}
+
+fun ViewTree.ringLook(): Look {
+    val l = look()
+    lookResolve(this.theme.ring, 0, this.width, 0, 0.0, l)
+    l
+}
+
+fun ViewTree.paintNode(n: int, ox: f64, oy: f64, inherited: int, ink: int, inkA: f64, opacity: f64,
+                       cl: f64, ct: f64, cr: f64, cb: f64, var painter: ViewPainter): void {
+    if (this.flex.has(n, FLEX_F_HIDDEN)) return
+    val x = ox + this.flex.x[n] + this.tx[n]
+    val y = oy + this.flex.y[n] + this.ty[n]
+    val w = this.flex.w[n]
+    val h = this.flex.h[n]
+    this.ax[n] = x
+    this.ay[n] = y
+    // Off the clip entirely: nothing of it shows or takes input.
+    if (x > cr || y > cb || x + w < cl || y + h < ct) return
+    val role = this.role[n]
+    val states = if (role != ROLE_NONE) this.own[n] else inherited | (this.own[n] & (ON_SELECTED | ON_DISABLED))
+    this.resolveLook(n, states, ink, inkA)
+    val a = opacity * this.looks[n].opacity * this.alpha[n]
+    if (a <= 0.0) return
+    val solid = this.looks[n].solid
+    val clipsLook = this.looks[n].clip
+    val color = this.looks[n].color
+    val colorA = this.looks[n].colorA
+    if (this.looks[n].paintsBox()) painter.box(x, y, w, h, this.looks[n], a)
+    val kind = this.kind[n]
+    if (kind == EL_TEXT) this.paintText(n, x, y, w, a, painter)
+    else if (kind == EL_IMAGE && this.image[n] != 0) painter.image(this.image[n], x + this.flex.padL[n], y + this.flex.padT[n], w - this.flex.padL[n] - this.flex.padR[n], h - this.flex.padT[n] - this.flex.padB[n], a)
+    if (role == ROLE_SLIDER) this.paintSlider(n, x, y, w, h, states, a, painter)
+    // Input: what it takes.
+    var nl = cl
+    var nt = ct
+    var nr = cr
+    var nb = cb
+    val scrolls = this.flex.has(n, FLEX_F_SCROLL_X) || this.flex.has(n, FLEX_F_SCROLL_Y)
+    if (role != ROLE_NONE || solid || scrolls || this.tooltip[n] != "") {
+        this.hitNode.append(n)
+        this.hitRect.append(fmax(x, cl))
+        this.hitRect.append(fmax(y, ct))
+        this.hitRect.append(fmin(x + w, cr))
+        this.hitRect.append(fmin(y + h, cb))
+    }
+    if ((role == ROLE_PRESS || role == ROLE_SLIDER) && (this.own[n] & ON_DISABLED) == 0) this.focusOrder.append(n)
+    if (role == ROLE_WINDOW) this.windows.append(n)
+    if (scrolls) this.scrollers.append(n)
+    // Children, clipped if it clips or scrolls.
+    if (this.flex.first[n] < 0) return
+    val clips = clipsLook || scrolls
+    if (clips) {
+        nl = fmax(cl, x)
+        nt = fmax(ct, y)
+        nr = fmin(cr, x + w)
+        nb = fmin(cb, y + h)
+        painter.clipPush(x, y, w, h)
+    }
+    val childStates = if (role != ROLE_NONE) states else inherited
+    var c = this.flex.first[n]
+    val cx = x - this.sx[n]
+    val cy = y - this.sy[n]
+    while (c >= 0) {
+        this.paintNode(c, cx, cy, childStates, color, colorA, a, nl, nt, nr, nb, painter)
+        c = this.flex.next[c]
+    }
+    if (clips) painter.clipPop()
+    if (scrolls) this.paintScrollbar(n, x, y, w, h, a, painter)
+    return
+}
+
+fun ViewTree.paintText(n: int, x: f64, y: f64, w: f64, a: f64, var painter: ViewPainter): void {
+    val align = this.looks[n].textAlign
+    val lines = this.texts.lines[n]
+    val face = this.texts.face[n]
+    val lh = this.texts.lineH[n]
+    val inset = (lh - this.texts.font.lineHeight(face)) / 2.0
+    val left = x + this.flex.padL[n]
+    val room = w - this.flex.padL[n] - this.flex.padR[n]
+    var ly = y + this.flex.padT[n] + inset
+    val t = this.texts.text[n]
+    for (i in 0 until lines.starts.size) {
+        val lw = lines.widths[i]
+        val lx = if (align == TEXT_CENTER) left + (room - lw) / 2.0 else if (align == TEXT_RIGHT) left + room - lw else left
+        if (lines.ends[i] > lines.starts[i]) painter.text(face, t, lines.starts[i], lines.ends[i], lx, ly, this.looks[n], a)
+        ly = ly + lh
+    }
+    return
+}
+
+/** A slider draws its track, the filled part and the knob from the theme. */
+fun ViewTree.paintSlider(n: int, x: f64, y: f64, w: f64, h: f64, states: int, a: f64, var painter: ViewPainter): void {
+    val range = this.hi[n] - this.lo[n]
+    val t = if (range > 0.0) fmax(0.0, fmin(1.0, (this.value[n] - this.lo[n]) / range)) else 0.0
+    val knob = h * 0.8
+    val trackH = fmax(4.0, h * 0.25)
+    val ty = y + (h - trackH) / 2.0
+    val l = look()
+    lookResolve(this.theme.track, states, this.width, 0, 0.0, l)
+    painter.box(x, ty, w, trackH, l, a)
+    if (t > 0.0) {
+        lookResolve(this.theme.trackFill, states, this.width, 0, 0.0, l)
+        painter.box(x, ty, w * t, trackH, l, a)
+    }
+    lookResolve(this.theme.knob, states, this.width, 0, 0.0, l)
+    painter.box(x + w * t - knob / 2.0, y + (h - knob) / 2.0, knob, knob, l, a)
+    return
+}
+
+val VIEW_SCROLLBAR_W = 6.0
+
+fun ViewTree.paintScrollbar(n: int, x: f64, y: f64, w: f64, h: f64, a: f64, var painter: ViewPainter): void {
+    val content = this.flex.contentH[n]
+    if (!this.flex.has(n, FLEX_F_SCROLL_Y) || content <= h + 0.5) return
+    val thumb = fmin(h, fmax(24.0, h * h / content))
+    val maxOffset = content - h
+    val ty = y + (h - thumb) * this.sy[n] / maxOffset
+    val l = look()
+    lookResolve(this.theme.thumb, if (this.dragScroll == n) ON_PRESSED else 0, this.width, 0, 0.0, l)
+    painter.box(x + w - VIEW_SCROLLBAR_W - 2.0, ty, VIEW_SCROLLBAR_W, thumb, l, a)
+    return
+}
+
+val VIEW_TOOLTIP_DELAY = 0.5
+
+fun ViewTree.paintTooltip(var painter: ViewPainter): void {
+    val n = this.tipNode
+    if (n < 0 || this.tooltip[n] == "") return
+    val s = this.theme.tooltip
+    val l = look()
+    lookResolve(s, 0, this.width, this.theme.text, this.theme.textA, l)
+    val size = s.get(P_FONT_SIZE, 0, this.width, this.theme.fontSize)
+    val families = this.theme.families
+    val face = this.texts.font.face(families[0], size, this.theme.fontWeight)
+    val padX = s.get(P_PAD_L, 0, this.width, 8.0)
+    val padY = s.get(P_PAD_T, 0, this.width, 6.0)
+    val maxW = s.get(P_MAX_W, 0, this.width, 260.0)
+    val lines = textLines()
+    textWrap(this.tooltip[n], face, maxW - padX * 2.0, 0, this.texts.font, lines)
+    val lh = this.texts.font.lineHeight(face)
+    val w = lines.widest + padX * 2.0
+    val h = f64FromInt(lines.starts.size) * lh + padY * 2.0
+    var x = this.tipX + 14.0
+    var y = this.tipY + 20.0
+    if (x + w > this.width - 4.0) x = this.width - 4.0 - w
+    if (y + h > this.height - 4.0) y = this.tipY - h - 8.0
+    x = fmax(4.0, x)
+    y = fmax(4.0, y)
+    painter.box(x, y, w, h, l, 1.0)
+    for (i in 0 until lines.starts.size) {
+        painter.text(face, this.tooltip[n], lines.starts[i], lines.ends[i], x + padX, y + padY + f64FromInt(i) * lh, l, 1.0)
+    }
+    return
+}

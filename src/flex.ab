@@ -582,7 +582,8 @@ fun FlexTree.computeLeaf(n: int, availW: f64, availH: f64, exactW: f64, exactH: 
     val padY = this.padT[n] + this.padB[n]
     var cw = 0.0
     var ch = 0.0
-    if (this.has(n, FLEX_F_MEASURED) && (ownW < 0.0 || ownH < 0.0)) {
+    // Always measured, even at a fixed size: the measurer keeps what it works out (a text's lines).
+    if (this.has(n, FLEX_F_MEASURED)) {
         val roomW = (if (ownW >= 0.0) ownW else fmin(availW, this.maxW[n])) - padX
         val roomH = (if (ownH >= 0.0) ownH else fmin(availH, this.maxH[n])) - padY
         val room = fmax(0.0, roomW)
