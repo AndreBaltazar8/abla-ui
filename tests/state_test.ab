@@ -1,0 +1,72 @@
+// Self-checks for State. Exits 0 when every check passes.
+
+import "abla/io"
+import "../src/state.ab"
+
+var failed = 0
+var passed = 0
+
+fun check(ok: bool, name: string): void {
+    if (ok) passed = passed + 1
+    else {
+        println("FAIL $name")
+        failed = failed + 1
+    }
+    return
+}
+
+class Settings(var open: bool by State(false), var volume: f64 by State(0.5), var name: string by State("panda"))
+
+fun main: int {
+    val s = Settings()
+    val start = stateRevision()
+    s.open = true
+    check(stateRevision() == start + 1, "a change moves the revision")
+    s.open = true
+    check(stateRevision() == start + 1, "writing the same value changes nothing")
+    check(s.^open.version == 1, "the value's own version counts its changes")
+    s.volume = 0.75
+    check(s.^volume.version == 1 && s.^open.version == 1, "versions are per value")
+
+    // Reads while a scope renders subscribe it; writes queue the readers.
+    val changed: array<int> = []
+    val previous = stateRead(7)
+    val unusedOpen = s.open
+    val unusedName = s.name
+    stateReadEnd(previous)
+    val other = stateRead(9)
+    val unusedVolume = s.volume
+    stateReadEnd(other)
+    check(stateReader == -1, "reading ends with the previous reader")
+    s.name = "red panda"
+    stateTakeChanged(changed)
+    check(changed.size == 1 && changed[0] == 7, "a write queues the scope that read it")
+    s.volume = 0.1
+    s.open = false
+    s.volume = 0.2
+    stateTakeChanged(changed)
+    check(changed.size == 2 && changed[0] == 9 && changed[1] == 7, "each scope is queued once, in order")
+    stateTakeChanged(changed)
+    check(changed.size == 0 && !stateHasChanges(), "taking empties the queue")
+
+    // peek doesn't subscribe.
+    val third = stateRead(3)
+    val unusedPeek = s.^name.peek()
+    stateReadEnd(third)
+    s.name = "fox"
+    stateTakeChanged(changed)
+    check(changed.size == 1 && changed[0] == 7, "peek reads without subscribing")
+    s.^name.unsubscribe(7)
+    s.name = "cat"
+    stateTakeChanged(changed)
+    check(changed.size == 0, "an unsubscribed scope isn't queued")
+
+    // Reads outside any scope subscribe nothing.
+    val unusedOutside = s.open
+    check(s.^open.readers.size == 1, "a read outside a render subscribes nothing")
+    val before = stateRevision()
+    stateTouchAll()
+    check(stateRevision() == before + 1, "touching all moves the revision")
+    println("state: $passed passed, $failed failed")
+    if (failed == 0) 0 else 1
+}

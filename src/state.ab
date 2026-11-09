@@ -1,0 +1,112 @@
+// State: values whose changes are seen. One primitive serves two ways of using it.
+//
+// - An app re-renders when anything changed: every write that changes a value moves the
+//   global revision (`stateRevision()`), as abla-one's run loop expects.
+// - A retained tree re-renders only what read the value: while a scope renders (a
+//   component, by its id; `stateRead(scope)` ... `stateReadEnd()`), each State it reads
+//   remembers it, and a write that changes the value queues those scopes
+//   (`stateTakeChanged()`).
+// - A game polls one value without any render: `^name.version` moves on each change.
+//
+//   class Settings(var open: bool by State(false), var volume: f64 by State(0.8))
+//   settings.open = true                // changed: revision + 1, readers queued
+//   settings.^volume.version            // how many times volume changed
+//   settings.^volume.peek()             // read without subscribing
+//
+// Writes that keep the value (`==`) change nothing. A value changed in place (an element
+// appended to an array held in State) isn't seen: call `touch()` on its State.
+
+var stateRevisionCount = 0
+
+/** Moves on every change of any State (and every `stateTouchAll`). */
+fun stateRevision(): int = stateRevisionCount
+
+/** The scope rendering now (its reads subscribe it), -1 when none. */
+var stateReader = -1
+
+// Scopes queued by changes since the last stateTakeChanged, and which are queued.
+val stateChangedScopes: array<int> = []
+val stateQueued: array<bool> = []
+
+/** Start recording reads for `scope` (an id >= 0 the caller owns); returns the previous reader. */
+fun stateRead(scope: int): int {
+    val previous = stateReader
+    stateReader = scope
+    previous
+}
+
+/** Stop recording, back to `previous` (stateRead's result). */
+fun stateReadEnd(previous: int): void {
+    stateReader = previous
+    return
+}
+
+fun stateQueue(scope: int): void {
+    while (stateQueued.size <= scope) stateQueued.append(false)
+    if (stateQueued[scope]) return
+    stateQueued[scope] = true
+    stateChangedScopes.append(scope)
+    return
+}
+
+/** The scopes queued since the last call, in the order they were queued (each once). */
+fun stateTakeChanged(var into: array<int>): void {
+    into.clear()
+    for (s in stateChangedScopes) {
+        into.append(s)
+        stateQueued[s] = false
+    }
+    stateChangedScopes.clear()
+    return
+}
+
+/** Is anything queued? */
+fun stateHasChanges(): bool = stateChangedScopes.size > 0
+
+/** Something outside any State changed: move the revision (abla-one's oneInvalidate). */
+fun stateTouchAll(): void {
+    stateRevisionCount = stateRevisionCount + 1
+    return
+}
+
+class State<T>(var current: T, var version: int = 0, val readers: array<int> = []) {
+    fun getValue(): T {
+        if (stateReader >= 0) this.subscribe(stateReader)
+        current
+    }
+
+    fun setValue(next: T): void {
+        if (next != current) {
+            current = next
+            this.touch()
+        }
+        return
+    }
+
+    /** The value, without subscribing the scope rendering now. */
+    fun peek(): T = current
+
+    /** Count a change made in place, and tell whoever read the value. */
+    fun touch(): void {
+        version = version + 1
+        stateRevisionCount = stateRevisionCount + 1
+        for (r in readers) stateQueue(r)
+        return
+    }
+
+    fun subscribe(scope: int): void {
+        for (r in readers) if (r == scope) return
+        readers.append(scope)
+        return
+    }
+
+    /** Forget `scope` (it no longer exists). */
+    fun unsubscribe(scope: int): void {
+        var at = -1
+        for (i in 0 until readers.size) if (readers[i] == scope) at = i
+        if (at < 0) return
+        for (i in at until readers.size - 1) readers[i] = readers[i + 1]
+        readers.truncate(readers.size - 1)
+        return
+    }
+}
