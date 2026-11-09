@@ -1,0 +1,83 @@
+// Line breaking over any font: the caller says how wide a span of text is and where a
+// grapheme cluster ends; this breaks text into lines no wider than a width. A renderer
+// with real fonts answers from its glyph metrics, a backend without them from width
+// tables, a test from a fixed advance.
+
+/** What wrapping needs from a font. Spans are byte offsets into UTF-8 text. */
+interface TextFont {
+    /** The width of bytes [start, end) of `text`, drawn as one run. */
+    fun width(text: string, start: int, end: int): f64
+    /** Where the grapheme cluster that starts at byte `i` ends. */
+    fun clusterEnd(text: string, i: int): int
+    /** The height of one line. */
+    fun lineHeight(): f64
+}
+
+/** Wrapped lines: byte spans of the text, each line's width, the widest. */
+class TextLines(val starts: array<int>, val ends: array<int>, val widths: array<f64>, var widest: f64, var cut: bool)
+
+fun textLines(): TextLines = TextLines([], [], [], 0.0, false)
+
+/**
+ * Break `text` into lines no wider than `maxWidth`: at spaces where it can, inside a word
+ * only where the word alone is wider, and at every '\n'. With `maxLines` > 0 the lines
+ * after it are dropped and `cut` is set. Trailing spaces don't count toward a line's width.
+ */
+fun textWrap(text: string, maxWidth: f64, maxLines: int, var font: TextFont, var out: TextLines): void {
+    out.starts.clear()
+    out.ends.clear()
+    out.widths.clear()
+    out.widest = 0.0
+    out.cut = false
+    var lineStart = 0
+    var i = 0
+    var width = 0.0
+    var lastBreak = -1
+    while (i <= text.size) {
+        if (maxLines > 0 && out.starts.size >= maxLines) {
+            out.cut = lineStart < text.size
+            return
+        }
+        val b = if (i < text.size) text[i] else 10
+        if (b == 10) {
+            textLine(out, text, lineStart, i, font)
+            lineStart = i + 1
+            width = 0.0
+            lastBreak = -1
+            i = i + 1
+        } else {
+            val next = font.clusterEnd(text, i)
+            val advance = font.width(text, i, next)
+            if (b != 32 && width + advance > maxWidth + 0.001 && i > lineStart) {
+                val atSpace = lastBreak > lineStart
+                textLine(out, text, lineStart, if (atSpace) lastBreak else i, font)
+                lineStart = if (atSpace) lastBreak + 1 else i
+                width = font.width(text, lineStart, i)
+                lastBreak = -1
+            } else {
+                if (b == 32) lastBreak = i
+                width = width + advance
+                i = next
+            }
+        }
+    }
+    return
+}
+
+fun textLine(var out: TextLines, text: string, start: int, end: int, var font: TextFont): void {
+    var e = end
+    while (e > start && text[e - 1] == 32) e = e - 1
+    val w = if (e > start) font.width(text, start, e) else 0.0
+    out.starts.append(start)
+    out.ends.append(e)
+    out.widths.append(w)
+    if (w > out.widest) out.widest = w
+    return
+}
+
+/** UTF-8: where the code point starting at byte `i` ends (a fallback cluster rule). */
+fun textCodePointEnd(text: string, i: int): int {
+    val b = text[i]
+    val n = if (b >= 240) 4 else if (b >= 224) 3 else if (b >= 192) 2 else 1
+    if (i + n > text.size) text.size else i + n
+}

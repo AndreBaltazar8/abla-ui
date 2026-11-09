@@ -1,0 +1,881 @@
+// Flex layout: rows, columns and stacks of boxes, in logical pixels, for anything that
+// draws its own UI. It imports nothing but the standard library, so a program that only
+// lays out (a test, another UI framework's backend) links none of the engine.
+//
+//   val tree = flexTree()
+//   val root = tree.add(-1)                  // -1: a root
+//   tree.setDir(root, FLEX_COLUMN)
+//   tree.setGap(root, 8.0)
+//   val title = tree.add(root)               // a leaf the measurer sizes (text)
+//   tree.setMeasured(title, true)
+//   tree.layout(root, 1280.0, 720.0, measurer)
+//   tree.x[title], tree.y[title]             // relative to the parent's box
+//   tree.w[title], tree.h[title]
+//
+// The rules follow CSS flexbox where they overlap, simplified:
+// - A container lays its flow children along its main axis (a row: x, a column: y) with
+//   `gap` between them, inside its padding. A stack lays them over each other.
+// - A child's main size is its fixed size, else its content's (a leaf's from the measurer).
+//   Room left over goes to children with `grow` (a FLEX_FILL size grows as 1); too little
+//   room shrinks children by shrink × size (1 by default, as CSS), never below their minimum.
+// - `wrap` breaks a row's (or column's) children onto more lines, `crossGap` between lines.
+// - Cross axis: `align` on the container, `alignSelf` on a child (FLEX_AUTO: the parent's);
+//   FLEX_STRETCH (and a FLEX_FILL size) take the line's whole cross size.
+// - `justify` places a line along the main axis when there is room left. In a stack,
+//   `align` places children across (x) and `justify` down (y).
+// - min / max clamp every size a node gets. FLEX_INF means no bound.
+// - A scrolling axis (scrollX / scrollY) lays the children out unbounded along it; the
+//   content's size is contentW / contentH and the node keeps its own size.
+// - An absolute child takes no room in the flow: it is placed in the parent's padding box
+//   by `anchor` (FLEX_ANCHOR_*, a 3 × 3 grid) inset by (offX, offY). A root's absolute
+//   children anchored to its edges are screen-edge anchors.
+//
+// Caching: each node keeps the inputs and result of its last layout and of its last
+// measurement. A clean node asked the same again answers at once, so after a change only
+// the changed nodes and their ancestors work again. A setter that changes a value marks
+// the node dirty (setting the same value does nothing). Dirtiness climbs to the ancestors
+// and stops at a node whose size cannot change (both sizes fixed, not measured): that
+// node is laid out again on its own, in place, with its last inputs.
+
+import "abla/float"
+import "abla/math"
+
+val FLEX_INF = 1.0e9
+
+val FLEX_COLUMN = 0
+val FLEX_ROW = 1
+val FLEX_STACK = 2
+
+val FLEX_CONTENT = 0 // the content's size (CSS auto / fit-content)
+val FLEX_FIXED = 1   // the size set with setWidth / setHeight
+val FLEX_FILL = 2    // all the room the parent gives (grows along its main axis, stretches across)
+
+val FLEX_AUTO = 0    // alignSelf: the parent's `align`
+val FLEX_START = 1
+val FLEX_CENTER = 2
+val FLEX_END = 3
+val FLEX_STRETCH = 4
+val FLEX_BETWEEN = 5 // justify: the room left goes between the children
+
+val FLEX_ANCHOR_TOP_LEFT = 0
+val FLEX_ANCHOR_TOP = 1
+val FLEX_ANCHOR_TOP_RIGHT = 2
+val FLEX_ANCHOR_LEFT = 3
+val FLEX_ANCHOR_CENTER = 4
+val FLEX_ANCHOR_RIGHT = 5
+val FLEX_ANCHOR_BOTTOM_LEFT = 6
+val FLEX_ANCHOR_BOTTOM = 7
+val FLEX_ANCHOR_BOTTOM_RIGHT = 8
+
+// Node flags (bits of `flags`).
+val FLEX_F_WRAP = 1
+val FLEX_F_SCROLL_X = 2
+val FLEX_F_SCROLL_Y = 4
+val FLEX_F_MEASURED = 8
+val FLEX_F_HIDDEN = 16
+val FLEX_F_ABSOLUTE = 32
+val FLEX_F_DIRTY = 64
+val FLEX_F_HAS_LAYOUT = 128
+val FLEX_F_HAS_MEASURE = 256
+val FLEX_F_LIVE = 512
+val FLEX_F_HAS_TEXT = 1024 // a measured leaf's last measurement (text columns) holds
+
+/** A measured leaf's content size (without its padding). */
+class FlexSize(var w: f64, var h: f64)
+
+/**
+ * Sizes measured leaves (text, images). `maxWidth` is the width the content may take
+ * (FLEX_INF when unbounded): text wraps to it. Returns the content's size; the returned
+ * object may be the same one each call.
+ */
+interface FlexMeasure {
+    fun measure(node: int, maxWidth: f64, maxHeight: f64): FlexSize
+}
+
+/** A measurer for trees without measured leaves: everything is 0 × 0. */
+class FlexNoMeasure(val size: FlexSize) : FlexMeasure {
+    fun measure(node: int, maxWidth: f64, maxHeight: f64): FlexSize = FlexSize(0.0, 0.0)
+}
+
+/**
+ * Nodes by index, a column per field. Style columns are written through the setters;
+ * x, y, w, h, contentW, contentH are the layout's results (x and y relative to the
+ * parent's box). `computed` counts the nodes laid out or measured afresh (not answered
+ * from a cache) since it was last zeroed, for tests and profiling.
+ */
+class FlexTree(
+    // Structure: parent, first / last child, next / previous sibling (-1 = none).
+    val parent: array<int>, val first: array<int>, val last: array<int>, val next: array<int>, val prev: array<int>,
+    val flags: array<int>,
+    // Style.
+    val dir: array<int>, val gap: array<f64>, val crossGap: array<f64>,
+    val padL: array<f64>, val padT: array<f64>, val padR: array<f64>, val padB: array<f64>,
+    val wMode: array<int>, val w0: array<f64>, val hMode: array<int>, val h0: array<f64>,
+    val minW: array<f64>, val maxW: array<f64>, val minH: array<f64>, val maxH: array<f64>,
+    val grow: array<f64>, val shrink: array<f64>,
+    val align: array<int>, val justify: array<int>, val alignSelf: array<int>,
+    val anchor: array<int>, val offX: array<f64>, val offY: array<f64>,
+    // Layout.
+    val x: array<f64>, val y: array<f64>, val w: array<f64>, val h: array<f64>,
+    val contentW: array<f64>, val contentH: array<f64>,
+    // A measured leaf's last measurement: the room it was given and the content size.
+    val textRoom: array<f64>, val textW: array<f64>, val textH: array<f64>,
+    // Caches: inputs (available, exact) and result of the last layout and measurement.
+    val lay: array<f64>,  // 6 per node: availW, availH, exactW, exactH, w, h
+    val meas: array<f64>, // the same for the last measurement
+    val free: array<int>,
+    val pending: array<int>,
+    var computed: int,
+    var retW: f64, var retH: f64,
+    // Scratch, a stack shared by nested computes: each box pushes its items and truncates on return.
+    val sItem: array<int>, val sBase: array<f64>, val sSize: array<f64>, val sCross: array<f64>,
+    val sLineEnd: array<int>, val sLineCross: array<f64>
+)
+
+fun flexTree(): FlexTree = FlexTree(
+    [], [], [], [], [], [],
+    [], [], [],
+    [], [], [], [],
+    [], [], [], [],
+    [], [], [], [],
+    [], [],
+    [], [], [],
+    [], [], [],
+    [], [], [], [],
+    [], [],
+    [], [], [],
+    [], [],
+    [], [],
+    0, 0.0, 0.0,
+    [], [], [], [],
+    [], []
+)
+
+fun FlexTree.size(): int = this.parent.size
+
+fun FlexTree.has(n: int, flag: int): bool = (this.flags[n] & flag) != 0
+
+fun FlexTree.flag(n: int, flag: int, on: bool): void {
+    this.flags[n] = if (on) this.flags[n] | flag else this.flags[n] & (0 - 1 - flag)
+    return
+}
+
+/** Reset slot `n` to a fresh node's style. */
+fun FlexTree.fresh(n: int, p: int): void {
+    this.parent[n] = p
+    this.first[n] = -1
+    this.last[n] = -1
+    this.next[n] = -1
+    this.prev[n] = -1
+    this.flags[n] = FLEX_F_DIRTY | FLEX_F_LIVE
+    this.dir[n] = FLEX_COLUMN
+    this.gap[n] = 0.0
+    this.crossGap[n] = 0.0
+    this.padL[n] = 0.0
+    this.padT[n] = 0.0
+    this.padR[n] = 0.0
+    this.padB[n] = 0.0
+    this.wMode[n] = FLEX_CONTENT
+    this.w0[n] = 0.0
+    this.hMode[n] = FLEX_CONTENT
+    this.h0[n] = 0.0
+    this.minW[n] = 0.0
+    this.maxW[n] = FLEX_INF
+    this.minH[n] = 0.0
+    this.maxH[n] = FLEX_INF
+    this.grow[n] = 0.0
+    this.shrink[n] = 1.0
+    this.align[n] = FLEX_STRETCH
+    this.justify[n] = FLEX_START
+    this.alignSelf[n] = FLEX_AUTO
+    this.anchor[n] = FLEX_ANCHOR_TOP_LEFT
+    this.offX[n] = 0.0
+    this.offY[n] = 0.0
+    this.x[n] = 0.0
+    this.y[n] = 0.0
+    this.w[n] = 0.0
+    this.h[n] = 0.0
+    this.contentW[n] = 0.0
+    this.contentH[n] = 0.0
+    for (i in 0 until 6) {
+        this.lay[n * 6 + i] = 0.0
+        this.meas[n * 6 + i] = 0.0
+    }
+    return
+}
+
+fun FlexTree.grow1(): int {
+    val n = this.parent.size
+    this.parent.append(-1)
+    this.first.append(-1)
+    this.last.append(-1)
+    this.next.append(-1)
+    this.prev.append(-1)
+    this.flags.append(0)
+    this.dir.append(0)
+    this.gap.append(0.0)
+    this.crossGap.append(0.0)
+    this.padL.append(0.0)
+    this.padT.append(0.0)
+    this.padR.append(0.0)
+    this.padB.append(0.0)
+    this.wMode.append(0)
+    this.w0.append(0.0)
+    this.hMode.append(0)
+    this.h0.append(0.0)
+    this.minW.append(0.0)
+    this.maxW.append(0.0)
+    this.minH.append(0.0)
+    this.maxH.append(0.0)
+    this.grow.append(0.0)
+    this.shrink.append(0.0)
+    this.align.append(0)
+    this.justify.append(0)
+    this.alignSelf.append(0)
+    this.anchor.append(0)
+    this.offX.append(0.0)
+    this.offY.append(0.0)
+    this.x.append(0.0)
+    this.y.append(0.0)
+    this.w.append(0.0)
+    this.h.append(0.0)
+    this.contentW.append(0.0)
+    this.contentH.append(0.0)
+    this.textRoom.append(0.0)
+    this.textW.append(0.0)
+    this.textH.append(0.0)
+    for (i in 0 until 6) {
+        this.lay.append(0.0)
+        this.meas.append(0.0)
+    }
+    n
+}
+
+/** A new node, the last child of `p` (-1: a root). */
+fun FlexTree.add(p: int): int {
+    var n = 0
+    if (this.free.size > 0) {
+        n = this.free[this.free.size - 1]
+        this.free.truncate(this.free.size - 1)
+    } else n = this.grow1()
+    this.fresh(n, -1)
+    if (p >= 0) this.attach(n, p, -1)
+    n
+}
+
+/** Link `n` (detached) under `p` before sibling `before` (-1: at the end). */
+fun FlexTree.attach(n: int, p: int, before: int): void {
+    this.parent[n] = p
+    if (before < 0) {
+        val tail = this.last[p]
+        this.prev[n] = tail
+        this.next[n] = -1
+        if (tail >= 0) this.next[tail] = n else this.first[p] = n
+        this.last[p] = n
+    } else {
+        val ahead = this.prev[before]
+        this.prev[n] = ahead
+        this.next[n] = before
+        this.prev[before] = n
+        if (ahead >= 0) this.next[ahead] = n else this.first[p] = n
+    }
+    this.markDirty(p)
+    return
+}
+
+/** Unlink `n` from its parent, keeping its subtree. */
+fun FlexTree.detach(n: int): void {
+    val p = this.parent[n]
+    if (p < 0) return
+    val a = this.prev[n]
+    val b = this.next[n]
+    if (a >= 0) this.next[a] = b else this.first[p] = b
+    if (b >= 0) this.prev[b] = a else this.last[p] = a
+    this.prev[n] = -1
+    this.next[n] = -1
+    this.parent[n] = -1
+    this.markDirty(p)
+    return
+}
+
+/** Move `n` to just before sibling `before` under the same parent (-1: to the end). */
+fun FlexTree.moveBefore(n: int, before: int): void {
+    if (n == before || this.next[n] == before && before >= 0) return
+    val p = this.parent[n]
+    if (before < 0 && this.last[p] == n) return
+    this.detach(n)
+    this.attach(n, p, before)
+    return
+}
+
+/** Remove `n` and its subtree; their slots are reused by later adds. */
+fun FlexTree.remove(n: int): void {
+    this.detach(n)
+    this.release(n)
+    return
+}
+
+fun FlexTree.release(n: int): void {
+    var c = this.first[n]
+    while (c >= 0) {
+        val after = this.next[c]
+        this.release(c)
+        c = after
+    }
+    this.flags[n] = 0
+    this.parent[n] = -1
+    this.free.append(n)
+    return
+}
+
+fun FlexTree.childCount(n: int): int {
+    var count = 0
+    var c = this.first[n]
+    while (c >= 0) {
+        count = count + 1
+        c = this.next[c]
+    }
+    count
+}
+
+// ── style setters: each marks the node dirty only when the value changes ─────
+
+fun FlexTree.setDir(n: int, v: int): void {
+    if (this.dir[n] == v) return
+    this.dir[n] = v
+    this.markDirty(n)
+    return
+}
+
+fun FlexTree.setFlag(n: int, flag: int, on: bool): void {
+    if (this.has(n, flag) == on) return
+    this.flag(n, flag, on)
+    // Hiding, showing or taking a child out of the flow changes its parent's layout.
+    if (flag == FLEX_F_HIDDEN || flag == FLEX_F_ABSOLUTE || flag == FLEX_F_MEASURED) this.markSelf(n)
+    else this.markDirty(n)
+    return
+}
+
+fun FlexTree.setWrap(n: int, on: bool): void = this.setFlag(n, FLEX_F_WRAP, on)
+fun FlexTree.setScroll(n: int, sx: bool, sy: bool): void {
+    this.setFlag(n, FLEX_F_SCROLL_X, sx)
+    this.setFlag(n, FLEX_F_SCROLL_Y, sy)
+    return
+}
+fun FlexTree.setMeasured(n: int, on: bool): void = this.setFlag(n, FLEX_F_MEASURED, on)
+fun FlexTree.setHidden(n: int, on: bool): void = this.setFlag(n, FLEX_F_HIDDEN, on)
+
+fun FlexTree.setGap(n: int, v: f64): void {
+    if (this.gap[n] == v && this.crossGap[n] == v) return
+    this.gap[n] = v
+    this.crossGap[n] = v
+    this.markDirty(n)
+    return
+}
+
+fun FlexTree.setGaps(n: int, main: f64, cross: f64): void {
+    if (this.gap[n] == main && this.crossGap[n] == cross) return
+    this.gap[n] = main
+    this.crossGap[n] = cross
+    this.markDirty(n)
+    return
+}
+
+fun FlexTree.setPadding(n: int, l: f64, t: f64, r: f64, b: f64): void {
+    if (this.padL[n] == l && this.padT[n] == t && this.padR[n] == r && this.padB[n] == b) return
+    this.padL[n] = l
+    this.padT[n] = t
+    this.padR[n] = r
+    this.padB[n] = b
+    this.markDirty(n)
+    return
+}
+
+fun FlexTree.setWidth(n: int, mode: int, v: f64): void {
+    if (this.wMode[n] == mode && this.w0[n] == v) return
+    this.wMode[n] = mode
+    this.w0[n] = v
+    this.markSelf(n)
+    return
+}
+
+fun FlexTree.setHeight(n: int, mode: int, v: f64): void {
+    if (this.hMode[n] == mode && this.h0[n] == v) return
+    this.hMode[n] = mode
+    this.h0[n] = v
+    this.markSelf(n)
+    return
+}
+
+fun FlexTree.setMinMax(n: int, minW: f64, maxW: f64, minH: f64, maxH: f64): void {
+    if (this.minW[n] == minW && this.maxW[n] == maxW && this.minH[n] == minH && this.maxH[n] == maxH) return
+    this.minW[n] = minW
+    this.maxW[n] = maxW
+    this.minH[n] = minH
+    this.maxH[n] = maxH
+    this.markSelf(n)
+    return
+}
+
+fun FlexTree.setFlex(n: int, grow: f64, shrink: f64): void {
+    if (this.grow[n] == grow && this.shrink[n] == shrink) return
+    this.grow[n] = grow
+    this.shrink[n] = shrink
+    this.markSelf(n)
+    return
+}
+
+fun FlexTree.setAlign(n: int, align: int, justify: int): void {
+    if (this.align[n] == align && this.justify[n] == justify) return
+    this.align[n] = align
+    this.justify[n] = justify
+    this.markDirty(n)
+    return
+}
+
+fun FlexTree.setAlignSelf(n: int, v: int): void {
+    if (this.alignSelf[n] == v) return
+    this.alignSelf[n] = v
+    this.markSelf(n)
+    return
+}
+
+/** Take `n` out of the flow and place it by `anchor` in its parent, inset by (dx, dy). */
+fun FlexTree.setAbsolute(n: int, anchor: int, dx: f64, dy: f64): void {
+    this.setFlag(n, FLEX_F_ABSOLUTE, true)
+    if (this.anchor[n] == anchor && this.offX[n] == dx && this.offY[n] == dy) return
+    this.anchor[n] = anchor
+    this.offX[n] = dx
+    this.offY[n] = dy
+    this.markSelf(n)
+    return
+}
+
+/** A measured leaf's content changed (its text, its font): measure it again. */
+fun FlexTree.remeasure(n: int): void {
+    this.flag(n, FLEX_F_HAS_TEXT, false)
+    this.markDirty(n)
+    return
+}
+
+// ── dirtiness ────────────────────────────────────────────────────────────────
+
+/** Can this node's size change when its content does? If not, it bounds a relayout. */
+fun FlexTree.isBoundary(n: int): bool =
+    this.wMode[n] == FLEX_FIXED && this.hMode[n] == FLEX_FIXED && !this.has(n, FLEX_F_MEASURED)
+
+/** Mark `n` and, as its own size or place changed, its parent. */
+fun FlexTree.markSelf(n: int): void {
+    this.markDirty(n)
+    if (this.parent[n] >= 0) this.markDirty(this.parent[n])
+    return
+}
+
+/** Mark `n` changed; its ancestors up to a relayout boundary are marked too. */
+fun FlexTree.markDirty(n: int): void {
+    var at = n
+    while (at >= 0) {
+        if (this.has(at, FLEX_F_DIRTY)) return
+        this.flag(at, FLEX_F_DIRTY, true)
+        if (this.parent[at] >= 0 && this.isBoundary(at) && this.has(at, FLEX_F_HAS_LAYOUT)) {
+            this.pending.append(at)
+            return
+        }
+        at = this.parent[at]
+    }
+    return
+}
+
+fun FlexTree.isDirty(n: int): bool = this.has(n, FLEX_F_DIRTY)
+
+/** Does anything in the tree of `root` need laying out? */
+fun FlexTree.needsLayout(root: int): bool = this.has(root, FLEX_F_DIRTY) || this.pending.size > 0
+
+/**
+ * Lay `root` out in a `width` × `height` box (its own size rules apply inside it: a root
+ * with FLEX_FILL sizes takes the whole box). Clean subtrees are not visited.
+ */
+fun FlexTree.layout(root: int, width: f64, height: f64, var measurer: FlexMeasure): void {
+    val b = root * 6
+    if (this.has(root, FLEX_F_DIRTY) || !this.has(root, FLEX_F_HAS_LAYOUT) || this.lay[b] != width || this.lay[b + 1] != height) {
+        this.x[root] = 0.0
+        this.y[root] = 0.0
+        this.compute(root, width, height, -1.0, -1.0, true, measurer)
+    }
+    // Boundaries marked inside a clean ancestor: each again with its last inputs.
+    var i = 0
+    while (i < this.pending.size) {
+        val n = this.pending[i]
+        if (this.has(n, FLEX_F_LIVE) && this.has(n, FLEX_F_DIRTY) && this.has(n, FLEX_F_HAS_LAYOUT)) {
+            val nb = n * 6
+            this.compute(n, this.lay[nb], this.lay[nb + 1], this.lay[nb + 2], this.lay[nb + 3], true, measurer)
+        }
+        i = i + 1
+    }
+    this.pending.clear()
+    return
+}
+
+fun flexClamp(v: f64, lo: f64, hi: f64): f64 = fmax(lo, fmin(v, hi))
+
+/**
+ * Size node `n` given the room it has (availW / availH; FLEX_INF = unbounded) and the size
+ * it must have (exactW / exactH; negative = free). With `doLayout` its children are placed
+ * and its w / h kept; without, it only answers its size. The size goes to retW / retH.
+ */
+fun FlexTree.compute(n: int, availW: f64, availH: f64, exactW: f64, exactH: f64, doLayout: bool, var measurer: FlexMeasure): void {
+    val b = n * 6
+    if (this.has(n, FLEX_F_DIRTY)) {
+        this.flag(n, FLEX_F_DIRTY | FLEX_F_HAS_LAYOUT | FLEX_F_HAS_MEASURE, false)
+    } else {
+        if (this.has(n, FLEX_F_HAS_LAYOUT) && this.lay[b] == availW && this.lay[b + 1] == availH && this.lay[b + 2] == exactW && this.lay[b + 3] == exactH) {
+            this.retW = this.lay[b + 4]
+            this.retH = this.lay[b + 5]
+            if (doLayout) {
+                this.w[n] = this.retW
+                this.h[n] = this.retH
+            }
+            return
+        }
+        if (!doLayout && this.has(n, FLEX_F_HAS_MEASURE) && this.meas[b] == availW && this.meas[b + 1] == availH && this.meas[b + 2] == exactW && this.meas[b + 3] == exactH) {
+            this.retW = this.meas[b + 4]
+            this.retH = this.meas[b + 5]
+            return
+        }
+    }
+    this.computed = this.computed + 1
+    if (this.has(n, FLEX_F_MEASURED) || this.first[n] < 0) this.computeLeaf(n, availW, availH, exactW, exactH, measurer)
+    else this.computeBox(n, availW, availH, exactW, exactH, doLayout, measurer)
+    if (doLayout) {
+        this.w[n] = this.retW
+        this.h[n] = this.retH
+        this.flag(n, FLEX_F_HAS_LAYOUT, true)
+        this.lay[b] = availW
+        this.lay[b + 1] = availH
+        this.lay[b + 2] = exactW
+        this.lay[b + 3] = exactH
+        this.lay[b + 4] = this.retW
+        this.lay[b + 5] = this.retH
+    } else {
+        this.flag(n, FLEX_F_HAS_MEASURE, true)
+        this.meas[b] = availW
+        this.meas[b + 1] = availH
+        this.meas[b + 2] = exactW
+        this.meas[b + 3] = exactH
+        this.meas[b + 4] = this.retW
+        this.meas[b + 5] = this.retH
+    }
+    return
+}
+
+/** A node's own size along one axis given the room, or -1 when its content decides. */
+fun flexOwn(mode: int, fixed: f64, avail: f64, exact: f64, lo: f64, hi: f64): f64 =
+    if (exact >= 0.0) flexClamp(exact, lo, hi)
+    else if (mode == FLEX_FIXED) flexClamp(fixed, lo, hi)
+    else if (mode == FLEX_FILL && avail < FLEX_INF) flexClamp(avail, lo, hi)
+    else -1.0
+
+fun FlexTree.computeLeaf(n: int, availW: f64, availH: f64, exactW: f64, exactH: f64, var measurer: FlexMeasure): void {
+    val ownW = flexOwn(this.wMode[n], this.w0[n], availW, exactW, this.minW[n], this.maxW[n])
+    val ownH = flexOwn(this.hMode[n], this.h0[n], availH, exactH, this.minH[n], this.maxH[n])
+    val padX = this.padL[n] + this.padR[n]
+    val padY = this.padT[n] + this.padB[n]
+    var cw = 0.0
+    var ch = 0.0
+    if (this.has(n, FLEX_F_MEASURED) && (ownW < 0.0 || ownH < 0.0)) {
+        val roomW = (if (ownW >= 0.0) ownW else fmin(availW, this.maxW[n])) - padX
+        val roomH = (if (ownH >= 0.0) ownH else fmin(availH, this.maxH[n])) - padY
+        val room = fmax(0.0, roomW)
+        // The same content measured in any room between its last width and its last room
+        // breaks into the same lines: no need to ask again.
+        if (this.has(n, FLEX_F_HAS_TEXT) && room >= this.textW[n] - 0.001 && room <= this.textRoom[n] + 0.001) {
+            cw = this.textW[n]
+            ch = this.textH[n]
+        } else {
+            val s = measurer.measure(n, room, fmax(0.0, roomH))
+            cw = s.w
+            ch = s.h
+            this.textRoom[n] = room
+            this.textW[n] = cw
+            this.textH[n] = ch
+            this.flag(n, FLEX_F_HAS_TEXT, true)
+        }
+    }
+    this.contentW[n] = cw + padX
+    this.contentH[n] = ch + padY
+    this.retW = if (ownW >= 0.0) ownW else flexClamp(cw + padX, this.minW[n], this.maxW[n])
+    this.retH = if (ownH >= 0.0) ownH else flexClamp(ch + padY, this.minH[n], this.maxH[n])
+    return
+}
+
+// The main axis of a row is x; of a column y.
+fun FlexTree.mainMode(c: int, row: bool): int = if (row) this.wMode[c] else this.hMode[c]
+fun FlexTree.crossMode(c: int, row: bool): int = if (row) this.hMode[c] else this.wMode[c]
+fun FlexTree.mainFixed(c: int, row: bool): f64 = if (row) this.w0[c] else this.h0[c]
+fun FlexTree.mainMin(c: int, row: bool): f64 = if (row) this.minW[c] else this.minH[c]
+fun FlexTree.mainMax(c: int, row: bool): f64 = if (row) this.maxW[c] else this.maxH[c]
+fun FlexTree.alignOf(p: int, c: int): int = if (this.alignSelf[c] != FLEX_AUTO) this.alignSelf[c] else this.align[p]
+
+/** Does child `c` of `p` take its line's whole cross size? */
+fun FlexTree.stretches(p: int, c: int, row: bool): bool {
+    val mode = this.crossMode(c, row)
+    mode == FLEX_FILL || (mode == FLEX_CONTENT && this.alignOf(p, c) == FLEX_STRETCH)
+}
+
+/** In a stack: does child `c` take the whole height (justify stretch, or a fill height)? */
+fun FlexTree.stackFillsH(p: int, c: int): bool =
+    this.hMode[c] == FLEX_FILL || (this.hMode[c] == FLEX_CONTENT && this.justify[p] == FLEX_STRETCH)
+
+fun FlexTree.growOf(c: int, row: bool): f64 =
+    if (this.grow[c] > 0.0) this.grow[c] else if (this.mainMode(c, row) == FLEX_FILL) 1.0 else 0.0
+
+/** A fixed size along the main axis never shrinks (unlike CSS, where a width is only a basis),
+ *  nor does text across its lines. */
+fun FlexTree.shrinkOf(c: int, row: bool): f64 =
+    if (this.mainMode(c, row) == FLEX_FIXED) 0.0
+    // Text wraps narrower in a row, but in a column it can't get shorter than its lines.
+    else if (!row && this.has(c, FLEX_F_MEASURED)) 0.0
+    else this.shrink[c]
+
+/** Item `i`'s main size as an exact size, or -1 when it is the size it would take anyway. */
+fun FlexTree.exactMain(i: int): f64 = if (this.sSize[i] == this.sBase[i]) -1.0 else this.sSize[i]
+
+fun FlexTree.inFlow(c: int): bool = (this.flags[c] & (FLEX_F_HIDDEN | FLEX_F_ABSOLUTE)) == 0
+
+fun FlexTree.computeBox(n: int, availW: f64, availH: f64, exactW: f64, exactH: f64, doLayout: bool, var measurer: FlexMeasure): void {
+    val ownW = flexOwn(this.wMode[n], this.w0[n], availW, exactW, this.minW[n], this.maxW[n])
+    val ownH = flexOwn(this.hMode[n], this.h0[n], availH, exactH, this.minH[n], this.maxH[n])
+    val padX = this.padL[n] + this.padR[n]
+    val padY = this.padT[n] + this.padB[n]
+    val scrollX = this.has(n, FLEX_F_SCROLL_X)
+    val scrollY = this.has(n, FLEX_F_SCROLL_Y)
+    // The room inside the padding (unbounded along a scrolling axis).
+    var innerW = fmax(0.0, (if (ownW >= 0.0) ownW else fmin(availW, this.maxW[n])) - padX)
+    var innerH = fmax(0.0, (if (ownH >= 0.0) ownH else fmin(availH, this.maxH[n])) - padY)
+    if (scrollX) innerW = FLEX_INF
+    if (scrollY) innerH = FLEX_INF
+    val definiteW = ownW >= 0.0 && !scrollX
+    val definiteH = ownH >= 0.0 && !scrollY
+
+    val s0 = this.sItem.size
+    val l0 = this.sLineEnd.size
+    var c = this.first[n]
+    while (c >= 0) {
+        if (this.inFlow(c)) {
+            this.sItem.append(c)
+            this.sBase.append(0.0)
+            this.sSize.append(0.0)
+            this.sCross.append(0.0)
+        }
+        c = this.next[c]
+    }
+    val s1 = this.sItem.size
+    var contentW = 0.0
+    var contentH = 0.0
+    if (this.dir[n] == FLEX_STACK) {
+        for (i in s0 until s1) {
+            val k = this.sItem[i]
+            val ew = if (definiteW && this.stretches(n, k, false)) innerW else -1.0
+            val eh = if (definiteH && this.stackFillsH(n, k)) innerH else -1.0
+            this.compute(k, innerW, innerH, ew, eh, false, measurer)
+            this.sSize[i] = this.retW
+            this.sCross[i] = this.retH
+            contentW = fmax(contentW, this.retW)
+            contentH = fmax(contentH, this.retH)
+        }
+    } else {
+        val row = this.dir[n] == FLEX_ROW
+        val innerMain = if (row) innerW else innerH
+        val innerCross = if (row) innerH else innerW
+        val crossDefinite = if (row) definiteH else definiteW
+        val gap = this.gap[n]
+        // 1. Each child's base main size: fixed, or its content's.
+        for (i in s0 until s1) {
+            val k = this.sItem[i]
+            if (this.mainMode(k, row) == FLEX_FILL && innerMain < FLEX_INF) {
+                // A fill starts from nothing and grows into the room (CSS `flex: 1`).
+                this.sBase[i] = this.mainMin(k, row)
+                this.sCross[i] = -1.0
+            } else if (this.mainMode(k, row) == FLEX_FIXED) {
+                this.sBase[i] = flexClamp(this.mainFixed(k, row), this.mainMin(k, row), this.mainMax(k, row))
+                this.sCross[i] = -1.0
+            } else {
+                val ec = if (crossDefinite && this.stretches(n, k, row)) innerCross else -1.0
+                if (row) this.compute(k, innerW, innerH, -1.0, ec, false, measurer)
+                else this.compute(k, innerW, innerH, ec, -1.0, false, measurer)
+                this.sBase[i] = if (row) this.retW else this.retH
+                this.sCross[i] = if (row) this.retH else this.retW
+            }
+        }
+        // 2. Lines: one, or as many as wrapping takes.
+        if (this.has(n, FLEX_F_WRAP) && innerMain < FLEX_INF) {
+            var used = 0.0
+            var inLine = 0
+            for (i in s0 until s1) {
+                val add = this.sBase[i] + (if (inLine > 0) gap else 0.0)
+                if (inLine > 0 && used + add > innerMain + 0.001) {
+                    this.sLineEnd.append(i)
+                    this.sLineCross.append(0.0)
+                    used = this.sBase[i]
+                    inLine = 1
+                } else {
+                    used = used + add
+                    inLine = inLine + 1
+                }
+            }
+        }
+        this.sLineEnd.append(s1)
+        this.sLineCross.append(0.0)
+        val l1 = this.sLineEnd.size
+        val mainOwn = if (row) ownW else ownH
+        val scrollsMain = if (row) scrollX else scrollY
+        val singleDefinite = crossDefinite && l1 - l0 == 1
+        var lineStart = s0
+        var mainUsed = 0.0
+        var crossUsed = 0.0
+        for (line in l0 until l1) {
+            val end = this.sLineEnd[line]
+            // 3. Grow or shrink the line to its room.
+            var used = 0.0
+            var grow = 0.0
+            var shrink = 0.0
+            for (i in lineStart until end) {
+                val k = this.sItem[i]
+                used = used + this.sBase[i] + (if (i > lineStart) gap else 0.0)
+                grow = grow + this.growOf(k, row)
+                shrink = shrink + this.shrinkOf(k, row) * this.sBase[i]
+            }
+            val room = if (mainOwn >= 0.0 && !scrollsMain) mainOwn - (if (row) padX else padY)
+                else if (innerMain < FLEX_INF && (used > innerMain || grow > 0.0)) innerMain
+                else used
+            val free = room - used
+            for (i in lineStart until end) {
+                val k = this.sItem[i]
+                var size = this.sBase[i]
+                if (free > 0.0 && grow > 0.0) size = size + free * this.growOf(k, row) / grow
+                else if (free < 0.0 && shrink > 0.0) size = size + free * this.shrinkOf(k, row) * this.sBase[i] / shrink
+                this.sSize[i] = flexClamp(size, this.mainMin(k, row), this.mainMax(k, row))
+            }
+            // 4. Cross sizes at the final main sizes; a line is as thick as its thickest child.
+            var lineCross = 0.0
+            for (i in lineStart until end) {
+                val k = this.sItem[i]
+                val stretch = this.stretches(n, k, row)
+                // A child at its own size (nothing grew or shrank it) is asked as before, free.
+                val em = this.exactMain(i)
+                if (singleDefinite && stretch) {
+                    this.sCross[i] = innerCross
+                } else if (em < 0.0 && this.sCross[i] >= 0.0 && !(crossDefinite && stretch)) {
+                    // Step 1 asked this already.
+                } else {
+                    if (row) this.compute(k, innerW, innerH, em, -1.0, false, measurer)
+                    else this.compute(k, innerW, innerH, -1.0, em, false, measurer)
+                    this.sCross[i] = if (row) this.retH else this.retW
+                }
+                lineCross = fmax(lineCross, this.sCross[i])
+            }
+            if (singleDefinite) lineCross = innerCross
+            this.sLineCross[line] = lineCross
+            var lineMain = 0.0
+            for (i in lineStart until end) lineMain = lineMain + this.sSize[i] + (if (i > lineStart) gap else 0.0)
+            mainUsed = fmax(mainUsed, lineMain)
+            crossUsed = crossUsed + lineCross + (if (line > l0) this.crossGap[n] else 0.0)
+            lineStart = end
+        }
+        contentW = if (row) mainUsed else crossUsed
+        contentH = if (row) crossUsed else mainUsed
+    }
+    this.contentW[n] = contentW + padX
+    this.contentH[n] = contentH + padY
+    // A content-sized scroller is as big as its content, up to the room it has.
+    val w = if (ownW >= 0.0) ownW else flexClamp(fmin(contentW + padX, if (scrollX) fmin(availW, this.maxW[n]) else FLEX_INF), this.minW[n], this.maxW[n])
+    val h = if (ownH >= 0.0) ownH else flexClamp(fmin(contentH + padY, if (scrollY) fmin(availH, this.maxH[n]) else FLEX_INF), this.minH[n], this.maxH[n])
+    if (doLayout) {
+        this.place(n, s0, s1, l0, w, h, measurer)
+        this.placeAbsolute(n, w, h, measurer)
+    }
+    this.sItem.truncate(s0)
+    this.sBase.truncate(s0)
+    this.sSize.truncate(s0)
+    this.sCross.truncate(s0)
+    this.sLineEnd.truncate(l0)
+    this.sLineCross.truncate(l0)
+    this.retW = w
+    this.retH = h
+    return
+}
+
+/** Lay the flow children out at their final sizes and positions (scratch from computeBox). */
+fun FlexTree.place(n: int, s0: int, s1: int, l0: int, w: f64, h: f64, var measurer: FlexMeasure): void {
+    val innerW = (if (this.has(n, FLEX_F_SCROLL_X)) this.contentW[n] else w) - this.padL[n] - this.padR[n]
+    val innerH = (if (this.has(n, FLEX_F_SCROLL_Y)) this.contentH[n] else h) - this.padT[n] - this.padB[n]
+    if (this.dir[n] == FLEX_STACK) {
+        for (i in s0 until s1) {
+            val k = this.sItem[i]
+            val ew = if (this.stretches(n, k, false)) innerW else this.sSize[i]
+            val eh = if (this.stackFillsH(n, k)) innerH else this.sCross[i]
+            this.compute(k, innerW, innerH, ew, eh, true, measurer)
+            this.x[k] = this.padL[n] + flexOffset(this.alignOf(n, k), innerW - this.w[k])
+            this.y[k] = this.padT[n] + flexOffset(this.justify[n], innerH - this.h[k])
+        }
+        return
+    }
+    val row = this.dir[n] == FLEX_ROW
+    val innerMain = if (row) innerW else innerH
+    val gap = this.gap[n]
+    val justify = this.justify[n]
+    var lineStart = s0
+    var crossAt = if (row) this.padT[n] else this.padL[n]
+    for (line in l0 until this.sLineEnd.size) {
+        val end = this.sLineEnd[line]
+        val lineCross = this.sLineCross[line]
+        var used = 0.0
+        for (i in lineStart until end) used = used + this.sSize[i] + (if (i > lineStart) gap else 0.0)
+        val left = innerMain - used
+        val count = end - lineStart
+        var at = (if (row) this.padL[n] else this.padT[n]) + (if (left > 0.0 && justify != FLEX_BETWEEN) flexOffset(justify, left) else 0.0)
+        val extra = if (left > 0.0 && justify == FLEX_BETWEEN && count > 1) left / f64FromInt(count - 1) else 0.0
+        for (i in lineStart until end) {
+            val k = this.sItem[i]
+            val stretch = this.stretches(n, k, row)
+            val ec = if (stretch) lineCross else -1.0
+            val em = this.exactMain(i)
+            if (row) this.compute(k, innerW, innerH, em, ec, true, measurer)
+            else this.compute(k, innerW, innerH, ec, em, true, measurer)
+            val crossSize = if (row) this.h[k] else this.w[k]
+            val crossPos = crossAt + (if (stretch) 0.0 else flexOffset(this.alignOf(n, k), lineCross - crossSize))
+            if (row) {
+                this.x[k] = at
+                this.y[k] = crossPos
+            } else {
+                this.x[k] = crossPos
+                this.y[k] = at
+            }
+            at = at + this.sSize[i] + gap + extra
+        }
+        crossAt = crossAt + lineCross + this.crossGap[n]
+        lineStart = end
+    }
+    return
+}
+
+fun flexOffset(align: int, room: f64): f64 =
+    if (align == FLEX_CENTER) room / 2.0 else if (align == FLEX_END) room else 0.0
+
+/** Absolute children: sized in the padding box, placed by their anchor. */
+fun FlexTree.placeAbsolute(n: int, w: f64, h: f64, var measurer: FlexMeasure): void {
+    val innerW = fmax(0.0, w - this.padL[n] - this.padR[n])
+    val innerH = fmax(0.0, h - this.padT[n] - this.padB[n])
+    var c = this.first[n]
+    while (c >= 0) {
+        if ((this.flags[c] & (FLEX_F_HIDDEN | FLEX_F_ABSOLUTE)) == FLEX_F_ABSOLUTE) {
+            this.compute(c, innerW, innerH, -1.0, -1.0, true, measurer)
+            val col = this.anchor[c] % 3
+            val rw = this.anchor[c] / 3
+            this.x[c] = this.padL[n] + (if (col == 0) this.offX[c] else if (col == 1) (innerW - this.w[c]) / 2.0 + this.offX[c] else innerW - this.w[c] - this.offX[c])
+            this.y[c] = this.padT[n] + (if (rw == 0) this.offY[c] else if (rw == 1) (innerH - this.h[c]) / 2.0 + this.offY[c] else innerH - this.h[c] - this.offY[c])
+        }
+        c = this.next[c]
+    }
+    return
+}
