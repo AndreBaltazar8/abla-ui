@@ -45,7 +45,7 @@ fun panel(s: Style, children: array<El>): El = column(kitTheme.panel.with(s), ch
 
 /** A push button; `f` runs when it is clicked or activated. */
 fun button(t: string, s: Style, f: () -> void): El =
-    row(kitTheme.button.with(s), [text(t, style())]).pressable(f)
+    row(kitTheme.button.with(s), [text(t, style().noWrap())]).pressable(f)
 
 fun kitToggled(f: (bool) -> void, on: bool): () -> void = { -> f(!on) }
 
@@ -68,10 +68,11 @@ fun kitPick(f: (int) -> void, i: int): () -> void = { -> f(i) }
 fun tabs(labels: array<string>, selected: int, s: Style, f: (int) -> void): El {
     val items: array<El> = []
     for (i in 0 until labels.size) {
-        items.append(row(kitTheme.tab.grow(1.0).set(P_WIDTH, 0.0).set(P_SHRINK, 1.0), [text(labels[i], style())])
+        items.append(row(kitTheme.tab.grow(1.0).set(P_WIDTH, 0.0).set(P_SHRINK, 1.0), [text(labels[i], style().noWrap())])
             .pressable(kitPick(f, i)).selectedIf(i == selected).keyed(labels[i]))
     }
-    row(style().gap(4.0).with(s), items)
+    // The items stretch to the row's height (34 unless the style says otherwise).
+    row(style().gap(4.0).height(34.0).with(s), items)
 }
 
 /** A selectable list row holding `children`; `f` runs when it is clicked or activated. */

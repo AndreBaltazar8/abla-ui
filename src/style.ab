@@ -47,7 +47,8 @@ val P_FONT_WEIGHT = 26
 val P_FONT_FAMILY = 27  // index into the theme's families
 val P_LINE_HEIGHT = 28  // px; 0 = the font's
 val P_MAX_LINES = 29
-val P_LAYOUT_END = 30   // properties below this one are layout
+val P_NO_WRAP = 30      // 1: text stays on one line however narrow its box (CSS white-space: nowrap)
+val P_LAYOUT_END = 30   // properties up to this one are layout, those after it paint
 
 // Paint.
 val P_FILL = 31
@@ -241,6 +242,8 @@ fun Style.weight(v: int): Style = this.set(P_FONT_WEIGHT, f64FromInt(v))
 fun Style.family(index: int): Style = this.set(P_FONT_FAMILY, f64FromInt(index))
 fun Style.lineHeight(v: f64): Style = this.set(P_LINE_HEIGHT, v)
 fun Style.maxLines(v: int): Style = this.set(P_MAX_LINES, f64FromInt(v))
+/** Text on one line, however narrow its box: it overflows instead of wrapping. */
+fun Style.noWrap(): Style = this.set(P_NO_WRAP, 1.0)
 
 // Paint builders.
 fun Style.fill(rgb: int, alpha: f64): Style = this.set(P_FILL, f64FromInt(rgb)).set(P_FILL_A, alpha).set(P_FILL2, f64FromInt(rgb)).set(P_FILL2_A, alpha)
@@ -425,7 +428,7 @@ class Theme(
     var title: Style,       // a window's title text
     var body: Style,        // a window's body (padding, gap)
     var button: Style,      // with hover, pressed and focused states
-    var tab: Style,         // with hover and selected states
+    var tab: Style,         // one tab, with hover and selected states (it stretches to the tabs' height)
     var track: Style,       // a slider's track
     var trackFill: Style,   // the part of the track up to the value
     var knob: Style,        // with hover and pressed states
@@ -479,7 +482,7 @@ fun themeDefault(): Theme {
         style().row().align(FLEX_CENTER).justify(FLEX_CENTER).paddingXY(14.0, 0.0).height(34.0).fill(0x21262d, 1.0).border(1.0, 0x3d444d, 1.0).radius(6.0)
             .hover(style().fill(0x30363d, 1.0).border(1.0, accent, 0.8))
             .pressed(style().fill(0x1f6feb, 1.0).border(1.0, accent, 1.0)),
-        style().row().align(FLEX_CENTER).justify(FLEX_CENTER).height(34.0).fill(0x21262d, 1.0).radius(6.0)
+        style().row().align(FLEX_CENTER).justify(FLEX_CENTER).fill(0x21262d, 1.0).radius(6.0)
             .hover(style().fill(0x30363d, 1.0))
             .selected(style().fill(0x1f6feb, 1.0).color(0xffffff, 1.0)),
         style().fill(0x0d1117, 1.0).border(1.0, 0x30363d, 1.0).radius(3.0),

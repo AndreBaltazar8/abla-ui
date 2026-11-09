@@ -161,6 +161,7 @@ fun uiProperty(property: string, value: string): Style {
         "family" -> return style().family(f64ToInt(n))
         "lineHeight" -> return style().lineHeight(n)
         "maxLines" -> return style().maxLines(f64ToInt(n))
+        "noWrap" -> return if (value == "false") style() else style().noWrap()
         "textAlign" -> return style().textAlign(if (value == "center") TEXT_CENTER else if (value == "right" || value == "end") TEXT_RIGHT else TEXT_LEFT)
         "color" -> return style().color(uiColor(value), uiAlpha(value))
         "background" -> return style().fill(uiColor(value), uiAlpha(value))

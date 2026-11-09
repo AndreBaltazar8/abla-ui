@@ -133,10 +133,10 @@ interface ViewPainter {
 class ViewTexts(
     var font: TextFont,
     val text: array<string>, val face: array<int>, val lineH: array<f64>, val maxLines: array<int>,
-    val lines: array<TextLines>, val size: FlexSize
+    val lines: array<TextLines>, val size: FlexSize, val noWrap: array<bool> = []
 ) : FlexMeasure {
     fun measure(node: int, maxWidth: f64, maxHeight: f64): FlexSize {
-        textWrap(text[node], face[node], maxWidth, maxLines[node], font, lines[node])
+        textWrap(text[node], face[node], if (noWrap[node]) FLEX_INF else maxWidth, maxLines[node], font, lines[node])
         FlexSize(lines[node].widest, f64FromInt(lines[node].starts.size) * lineH[node])
     }
 }
@@ -222,6 +222,7 @@ fun ViewTree.newNode(parent: int): int {
         this.texts.lineH.append(0.0)
         this.texts.maxLines.append(0)
         this.texts.lines.append(textLines())
+        this.texts.noWrap.append(false)
     }
     this.kind[n] = EL_BOX
     this.key[n] = ""
@@ -244,6 +245,7 @@ fun ViewTree.newNode(parent: int): int {
     this.renderedIn[n] = -1
     this.texts.text[n] = ""
     this.texts.maxLines[n] = 0
+    this.texts.noWrap[n] = false
     n
 }
 
@@ -318,6 +320,13 @@ fun ViewTree.renderComponent(n: int): void {
         // A component rendering a component directly: the inner one gets a node of its own.
         this.setProps(n, box(style(), []))
         this.reconcileChildren(n, [out])
+        return
+    }
+    if (out.kind == EL_FRAGMENT || out.kind == EL_NONE) {
+        // Several elements, or none (an <If> at the top): a layer filling its parent, so what
+        // it holds anchors where the component is.
+        this.setProps(n, box(style().fillBoth().stack(), []))
+        this.reconcileChildren(n, if (out.kind == EL_FRAGMENT) elVisible(out.children) else array<El>())
         return
     }
     this.setProps(n, out)
@@ -408,7 +417,9 @@ fun ViewTree.applyFont(n: int): void {
     val weight = f64ToInt(this.layoutProp(s, P_FONT_WEIGHT, f64FromInt(inheritWeight)))
     val family = f64ToInt(this.layoutProp(s, P_FONT_FAMILY, f64FromInt(inheritFamily)))
     val maxLines = f64ToInt(this.layoutProp(s, P_MAX_LINES, 0.0))
-    if (size == this.fontSize[n] && weight == this.fontWeight[n] && family == this.fontFamily[n] && maxLines == this.texts.maxLines[n] && this.texts.lineH[n] > 0.0) return
+    val noWrap = this.layoutProp(s, P_NO_WRAP, 0.0) != 0.0
+    if (size == this.fontSize[n] && weight == this.fontWeight[n] && family == this.fontFamily[n] && maxLines == this.texts.maxLines[n] && noWrap == this.texts.noWrap[n] && this.texts.lineH[n] > 0.0) return
+    this.texts.noWrap[n] = noWrap
     this.fontSize[n] = size
     this.fontWeight[n] = weight
     this.fontFamily[n] = family
