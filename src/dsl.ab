@@ -121,6 +121,7 @@ compile fun uiDslAttributes(cursor: ParserCursor, var a: UiDslAttributes): bool 
             parserFail(cursor, "expected an attribute")
             return true
         }
+        if (uiDslIndex(a, name) >= 0) parserFail(cursor, "the attribute $name is given twice")
         parserRawSkipWhitespace(cursor)
         if (!parserRawConsume(cursor, "=")) {
             a.names.append(name)
