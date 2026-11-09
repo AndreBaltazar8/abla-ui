@@ -441,7 +441,10 @@ class Theme(
     // A program's own named styles (kinds: "card", "chip", "Button.primary"…) and named
     // scopes: other themes for subtrees. Looked up by name, never iterated.
     val named: Map<string, Style> = Map(),
-    val scopes: Map<string, Theme> = Map()
+    val scopes: Map<string, Theme> = Map(),
+    // A window's close button (with its hover and pressed states).
+    var close: Style = style().size(32.0, 32.0).align(FLEX_CENTER).justify(FLEX_CENTER).radius(6.0).color(0x9aa5b1, 1.0)
+        .hover(style().fill(0xffffff, 0.08).color(0xeef2f6, 1.0))
 )
 
 /** Name a style in this theme (a kind, a part, a variant). */

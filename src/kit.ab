@@ -91,8 +91,7 @@ fun windowPanel(title: string, close: () -> void, s: Style, body: array<El>): El
     column(kitTheme.window.with(s), [
         row(kitTheme.titleBar, [
             text(title, kitTheme.title),
-            row(style().size(32.0, 32.0).align(FLEX_CENTER).justify(FLEX_CENTER).radius(6.0).color(kitTheme.muted, kitTheme.mutedA)
-                .hover(style().fill(0xffffff, 0.08).color(kitTheme.text, kitTheme.textA)), [text(KIT_CROSS, style())]).pressable(close).keyed("close")
+            row(kitTheme.close, [text(KIT_CROSS, style())]).pressable(close).keyed("close")
         ]).keyed("title"),
         column(kitTheme.body, body).keyed("body")
     ]).closable(close)
