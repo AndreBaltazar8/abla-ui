@@ -27,8 +27,11 @@ width tables and another real fonts. Painting goes through `ViewPainter`, input 
 
 ## Using it
 
+abla-ui is a package: import it from GitHub and run `ablac package update --project .` once
+to resolve and lock it. One module of it is `github("AndreBaltazar8/abla-ui/src/flex")`.
+
 ```abla
-import "../abla-ui/src/ui.ab"
+import github("AndreBaltazar8/abla-ui")
 
 class Settings(var open: bool by State(true), var volume: f64 by State(0.8))
 val settings = Settings()
