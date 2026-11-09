@@ -28,7 +28,7 @@ width tables and another real fonts. Painting goes through `ViewPainter`, input 
 ## Using it
 
 abla-ui is a package: import it from GitHub and run `ablac package update --project .` once
-to resolve and lock it. One module of it is `github("AndreBaltazar8/abla-ui/src/flex")`.
+to resolve and lock it. One module of it is `github("AndreBaltazar8/abla-ui/flex")`.
 
 ```abla
 import github("AndreBaltazar8/abla-ui")
