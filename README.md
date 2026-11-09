@@ -1,10 +1,10 @@
 # abla-ui
 
 The parts of a component UI that don't depend on where it is drawn, written in
-[Abla](../ablac): state with change tracking, flex layout, a retained tree of components
+[Abla](https://github.com/AndreBaltazar8/ablac): state with change tracking, flex layout, a retained tree of components
 with keyed reconciliation, input and focus over it, and a kit of controls. It is shared by
-[abla-one](../abla-one) (applications on Android, the web, desktop and e-paper) and
-[abla-forge](../abla-web3d) (the game engine), which each bring a renderer, real fonts and
+[abla-one](https://github.com/AndreBaltazar8/abla-one) (applications on Android, the web, desktop and e-paper) and
+abla-forge (the game engine, not public yet), which each bring a renderer, real fonts and
 their platform's input.
 
 It imports only the Abla standard library: no renderer, no platform, no application code.
