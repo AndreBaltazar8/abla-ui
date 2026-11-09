@@ -7,8 +7,8 @@
 // - A press on a pressable fires it when released over it. A slider follows the pointer
 //   while held. A mostly vertical drag that starts in a scroller scrolls it instead, and the
 //   wheel scrolls the innermost scroller under the pointer.
-// - Tab / Shift+Tab move focus through the focusable nodes in drawing order; Up / Down too
-//   while navigating (`navigating`, or whenever a window is shown). Enter / Space / A
+// - Tab / Shift+Tab move focus through the focusable nodes in drawing order (once something
+//   is focused, or while a window shows); Up / Down too while `navigating` is set. Enter / Space / A
 //   activate the focused node; Left / Right step a focused slider, Home / End jump.
 //   A focused node inside a scroller is scrolled into view.
 // - Escape (or B) clears focus and closes the topmost window (its `closable` handler).
@@ -110,8 +110,8 @@ fun ViewTree.focus(n: int): void {
 /** Does the UI hold the pointer (over a panel, a window, a widget, or dragging one)? */
 fun ViewTree.wantsPointer(): bool = this.overUi || this.active >= 0 || this.dragScroll >= 0
 
-/** Does the UI use the navigation keys now (something focused, or a window to navigate)? */
-fun ViewTree.wantsKeys(): bool = this.focused >= 0 || this.navigating || this.windows.size > 0
+/** Does the UI use the navigation keys now (something focused, or navigating)? */
+fun ViewTree.wantsKeys(): bool = this.focused >= 0 || this.navigating
 
 fun ViewTree.input(e: ViewInput): void {
     this.now = e.time
@@ -185,9 +185,12 @@ fun ViewTree.input(e: ViewInput): void {
     // The wheel scrolls the innermost scroller under the pointer.
     if (e.wheelY != 0.0 && wheel >= 0) this.scrollTo(wheel, this.sy[wheel] + e.wheelY)
     // Keys and the pad.
-    val arrows = this.navigating || this.windows.size > 0
-    val step = if (e.nav == NAV_NEXT && (this.focused >= 0 || arrows)) 1
-        else if (e.nav == NAV_PREV && (this.focused >= 0 || arrows)) -1
+    // Tab works between focused nodes and in windows; the arrows (and the pad's D-pad) only
+    // while navigating, as a menu opts in with ui.ab's uiNavigate.
+    val arrows = this.navigating
+    val tabs = this.focused >= 0 || arrows || this.windows.size > 0
+    val step = if (e.nav == NAV_NEXT && tabs) 1
+        else if (e.nav == NAV_PREV && tabs) -1
         else if (e.nav == NAV_DOWN && arrows) 1
         else if (e.nav == NAV_UP && arrows) -1
         else 0

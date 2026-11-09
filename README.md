@@ -49,7 +49,7 @@ class SettingsWindow() : Component {
 fun makeSettings(): Component = SettingsWindow()
 
 val tree = viewTree(myTheme, myFonts)          // myFonts: the platform's TextFont
-tree.mount(component("settings", makeSettings))
+tree.mount(comp("settings", makeSettings))
 // each frame:
 tree.input(events)       // ViewInput from the platform
 tree.update(width, height)

@@ -134,8 +134,8 @@ fun counting(): void {
     var t = viewTree(themeDefault(), Mono())
     var r = recorder()
     var e = viewInput()
-    val unusedCounter = t.mount(component("counter", makeCounter))
-    val unusedItems = t.mount(component("items", makeItems))
+    val unusedCounter = t.mount(comp("counter", makeCounter))
+    val unusedItems = t.mount(comp("items", makeItems))
     setItems(["a", "b", "c"])
     frame(t, e, r)
     check(said(r, "count 0") >= 0 && said(r, "add") >= 0, "a mounted component paints its text")
@@ -240,7 +240,7 @@ fun settings(): void {
     var t = viewTree(themeDefault(), Mono())
     var r = recorder()
     var e = viewInput()
-    val unusedSettings = t.mount(component("settings", makeSettings))
+    val unusedSettings = t.mount(comp("settings", makeSettings))
     frame(t, e, r)
     frame(t, e, r)
     check(said(r, "Settings") >= 0 && said(r, "Video") >= 0 && said(r, "Shadows") >= 0 && said(r, "Reset") >= 0, "the window shows its title and parts")
@@ -284,7 +284,8 @@ fun settings(): void {
     e.nav = NAV_NEXT
     frame(t, e, r)
     check(t.focused >= 0 && t.focused == t.focusOrder[0], "Tab focuses the first focusable")
-    // The close button comes first; Down twice reaches the second tab.
+    // The close button comes first; Down twice (arrows navigate when asked) reaches the second tab.
+    t.navigating = true
     e.nav = NAV_DOWN
     frame(t, e, r)
     frame(t, e, r)
@@ -293,6 +294,7 @@ fun settings(): void {
     frame(t, e, r)
     e.activate = false
     frame(t, e, r)
+    t.navigating = false
     check(model.tab == 1, "Down then Enter picks the second tab (tab ${model.tab})")
     // Focus the slider (after tabs ×2 and the toggle, the window's close button is first).
     var guard = 0

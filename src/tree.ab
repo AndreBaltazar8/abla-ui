@@ -8,7 +8,7 @@
 //       fun render(): El = column(style().padding(8.0), [text("${fps} fps", style())])
 //   }
 //   val tree = viewTree(theme, platformText)
-//   tree.mount(component("hud", { -> Hud() }))
+//   tree.mount(comp("hud", { -> Hud() }))
 //   each frame:
 //       tree.input(events)          // hit testing, hover, press, focus, scrolling (input.ab)
 //       tree.update(width, height)  // re-render what read a changed State, lay out what changed
@@ -81,7 +81,7 @@ fun image(handle: int, s: Style): El =
     El(EL_IMAGE, "", s, "", [], ROLE_NONE, 0.0, 0.0, 1.0, 0.0, false, false, elNothing, elNoValue, "", handle, "", null, "")
 fun spacer(): El = elMake(EL_BOX, style().grow(1.0), "", [])
 /** A component of type `type`, made by `make` the first time it is reconciled at its place. */
-fun component(type: string, make: () -> Component): El =
+fun comp(type: string, make: () -> Component): El =
     El(EL_COMPONENT, type, style(), "", [], ROLE_NONE, 0.0, 0.0, 1.0, 0.0, false, false, elNothing, elNoValue, "", 0, type, make, "")
 
 // Modifiers: each returns a new element.
