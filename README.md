@@ -117,39 +117,14 @@ change records match call for call.
 `scripts/test.sh` builds and runs every `tests/*_test.ab` natively (`ABLAC` picks the
 compiler). It builds with ablac 0.2.48 and newer.
 
-## Adopting it in abla-one
-
-abla-one has its own State, Style, Node and layout (`src/core`, `src/layout`). Moving it
-onto abla-ui could go in steps, each one usable on its own:
-
-1. **State.** `core/state.ab`'s `State` and revision are the same contract as abla-ui's
-   (`stateRevision()` for `oneRevision()`, `stateTouchAll()` for `oneInvalidate()`).
-   Cheap: an import and two aliases.
-2. **Layout for the backends that draw themselves** (desktop, epaper, web-canvas):
-   `layout/layout.ab`'s measuring becomes an adapter from Node and Resolved onto a
-   `FlexTree`, with the Inter width tables as a `TextFont`. The rules already match (rows,
-   columns, stacks, gap, padding, grow, fill, min/max, wrap, scroll); the layout gains the
-   caches. Android and web-document are untouched.
-3. **The retained tree.** Rendering into abla-ui's tree instead of building a fresh Node
-   tree each time gives the per-node change records (added, removed, moved, properties)
-   a retained host needs: Android's Compose host could recompose only the changed nodes.
-   This is the larger change: abla-one's string attributes and string-valued styles would
-   map onto typed properties, and web-document's server rendering would serialize from
-   the tree (keeping its HTML byte-stable). Breakpoints (`upTo`, `from`) and interaction
-   states exist in both; theme scopes would be a theme per subtree.
-
-A spike measured abla-one's current model on a settings-sized window (natively, release):
-render 126 µs, render plus cached layout 190 µs, paint list 108 µs. The cost is in rebuilding
-immutable trees and string-keyed styles each render, which step 3 removes.
-
-## License
-
-abla-ui is licensed under the [Mozilla Public License 2.0](LICENSE).
-
-### One grammar
+## One grammar
 
 `src/dsl.ab` is `$one`'s parser with abla-ui's element table: the grammar (tags, attributes,
 prefixes, handlers, text content, `<If>` / `<Else>` / `<For>`) is the same code, and only the
 table of what each tag compiles to and the runtime names differ. It depends only on
 `abla/compiler/parser`, so the end state is one parser in abla-ui taking the element table as
 a parameter, with `$one` and `$ui` both registered from it.
+
+## License
+
+abla-ui is licensed under the [Mozilla Public License 2.0](LICENSE).
