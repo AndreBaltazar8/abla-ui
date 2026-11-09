@@ -376,15 +376,17 @@ compile fun uiDslElement(cursor: ParserCursor): SyntaxExpression {
             syntaxCall("uiEach", [uiDslValue(a, "each", syntaxArray([])), syntaxInferredLambda([name], syntaxCall("fragment", [kids]), false)])
         }
         else -> {
-            // A program's own component function: Name(attributes in order, children).
+            // A program's own component: a function giving an element, or a class implementing
+            // Component (mounted under its key). Name(attributes in order, children); `key`
+            // goes to the mount, not to the call.
             val arguments: array<SyntaxExpression> = []
             var i = 0
             while (i < a.names.size) {
-                arguments.append(a.values[i])
+                if (a.names[i] != "key") arguments.append(a.values[i])
                 i = i + 1
             }
             if (children.size > 0) arguments.append(kids)
-            syntaxCall(tag, arguments)
+            syntaxCall("uiTag", [syntaxString(tag), uiDslText(a, "key", ""), syntaxCall(tag, arguments)])
         }
     }
     if (uiDslBuiltin(tag) && tag != "If" && tag != "For" && tag != "Else") node = uiDslCommon(tag, node, a)

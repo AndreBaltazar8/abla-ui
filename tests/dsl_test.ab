@@ -74,6 +74,24 @@ fun window(): El = $ui
       <Label textEffect="outline #000000 0.8">Hello</Label>
     </Window>
 
+/** A stateful class component used as a tag. */
+class Clicker(val label: string, var clicks: int by State(0)) : Component {
+    fun render(): El = $ui
+        <Button name={"clicker-$label"} onPress={ clicks += 1 }>{label} {clicks}</Button>
+}
+
+class Host(var round: int by State(0)) : Component {
+    fun render(): El = $ui
+        <Column gap=4>
+          <Text>round {round}</Text>
+          <Clicker label="a"/>
+          <Clicker label="b" key="second"/>
+        </Column>
+}
+
+val host = Host()
+fun makeHost(): Component = host
+
 class Mono() : TextFont {
     fun face(family: string, size: f64, weight: int): int = weight
     fun width(face: int, text: string, start: int, end: int): f64 = f64FromInt(end - start) * 8.0
@@ -168,6 +186,48 @@ fun main: int {
     e.released = true
     t.input(e)
     check(!demo.open, "a click on a template's button runs its handler")
+
+    // Class components as tags.
+    val tagged = host.render()
+    check(tagged.children[1].kind == EL_COMPONENT && tagged.children[1].key == "Clicker" && tagged.children[2].key == "second", "a class tag mounts a component, keyed by its tag name or its key")
+    var h = viewTree(themeDefault(), Mono())
+    val unusedHost = h.mount(comp("host", makeHost))
+    h.update(800.0, 600.0)
+    h.paint(painter)
+    val a = h.named("clicker-a")
+    var e2 = viewInput()
+    e2.x = h.ax[a] + 2.0
+    e2.y = h.ay[a] + 2.0
+    e2.pressed = true
+    e2.down = true
+    h.input(e2)
+    h.update(800.0, 600.0)
+    h.paint(painter)
+    e2.pressed = false
+    e2.down = false
+    e2.released = true
+    h.input(e2)
+    h.update(800.0, 600.0)
+    h.paint(painter)
+    val shown = h.texts.text[h.flex.first[h.named("clicker-a")]]
+    check(shown == "a 1", "its own State changes and re-renders it (${shown})")
+    host.round = 1
+    h.update(800.0, 600.0)
+    h.paint(painter)
+    val after = h.texts.text[h.flex.first[h.named("clicker-a")]]
+    check(after == "a 1", "its parent's re-render keeps the instance and its State (${after})")
+    var recs: array<int> = []
+    h.takeChanges(recs)
+    host.round = 2
+    h.update(800.0, 600.0)
+    h.takeChanges(recs)
+    var structural = 0
+    var k = 0
+    while (k < recs.size) {
+        if (recs[k] != CH_PROPS) structural = structural + 1
+        k = k + 3
+    }
+    check(structural == 0, "and adds, removes or moves no node (${structural})")
     println("dsl: $passed passed, $failed failed")
     if (failed == 0) 0 else 1
 }

@@ -80,6 +80,23 @@ class SettingsWindow() : Component {
 }
 ```
 
+A capitalised tag that isn't built in is a program's own: a function giving an element, or a
+class implementing `Component`, which is mounted under the tag's `key` (its name unless
+given) and keeps its first instance, and so its State, while its parent renders again:
+
+```abla
+class Counter(val label: string, var clicks: int by State(0)) : Component {
+    fun render(): El = $ui
+        <Button onPress={ clicks += 1 }>{label} {clicks}</Button>
+}
+
+fun Toolbar(): El = $ui
+    <Row gap=8>
+      <Counter label="apples"/>
+      <Counter label="pears" key="pears"/>
+    </Row>
+```
+
 Built in: `Column`, `Row`, `Stack`, `Box`, `Scroll`, `Pressable` (onPress), `Text`, `Label`,
 `Caption`, `Button` (onPress), `Toggle` (value, onChange), `Slider` (value, min, max,
 onChange), `Tabs` (labels, selected, onChange), `Window` (title, onClose), `Panel`, `List`,

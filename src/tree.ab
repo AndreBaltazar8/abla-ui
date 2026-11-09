@@ -318,18 +318,25 @@ fun ViewTree.renderComponent(n: int): void {
     stateReadEnd(previous)
     if (out.kind == EL_COMPONENT) {
         // A component rendering a component directly: the inner one gets a node of its own.
+        val outerKey = this.key[n]
         this.setProps(n, box(style(), []))
+        this.key[n] = outerKey
         this.reconcileChildren(n, [out])
         return
     }
     if (out.kind == EL_FRAGMENT || out.kind == EL_NONE) {
         // Several elements, or none (an <If> at the top): a layer filling its parent, so what
         // it holds anchors where the component is.
+        val layerKey = this.key[n]
         this.setProps(n, box(style().fillBoth().stack(), []))
+        this.key[n] = layerKey
         this.reconcileChildren(n, if (out.kind == EL_FRAGMENT) elVisible(out.children) else array<El>())
         return
     }
+    // The node keeps the component's key (its identity among its siblings), not its element's.
+    val key = this.key[n]
     this.setProps(n, out)
+    this.key[n] = key
     this.reconcileChildren(n, out.children)
     return
 }

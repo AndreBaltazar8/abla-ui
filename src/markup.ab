@@ -208,6 +208,17 @@ fun uiStyleSet(base: Style, target: string, state: string, property: string, val
 }
 
 fun uiKeyed(el: El, key: string): El = el.keyed(key)
+
+/**
+ * A custom tag's value. A component (a class implementing Component) is mounted under
+ * `key` (the tag's name unless the tag gives one): the first instance made at that place is
+ * kept, with its State, and later ones are dropped. An element from a function is used as
+ * it is (keyed when the tag gives a key).
+ */
+fun uiTag(tag: string, key: string, c: Component): El = comp(tag, uiKeep(c)).keyed(if (key == "") tag else key)
+fun uiTag(tag: string, key: string, e: El): El = e.keyed(if (key == "") e.key else key)
+
+fun uiKeep(c: Component): () -> Component = { -> c }
 fun uiNamed(el: El, name: string): El = el.named(name)
 fun uiTip(el: El, t: string): El = el.tip(t)
 fun uiSelected(el: El, on: bool): El = el.selectedIf(on)
