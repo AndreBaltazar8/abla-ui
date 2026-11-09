@@ -71,13 +71,13 @@ fun stateTouchAll(): void {
     return
 }
 
-class State<T>(var current: T, var version: int = 0, val readers: array<int> = []) {
-    fun getValue(): T {
+class State<StateValue>(var current: StateValue, var version: int = 0, val readers: array<int> = []) {
+    fun getValue(): StateValue {
         if (stateReader >= 0) this.subscribe(stateReader)
         current
     }
 
-    fun setValue(next: T): void {
+    fun setValue(next: StateValue): void {
         if (next != current) {
             current = next
             this.touch()
@@ -86,7 +86,7 @@ class State<T>(var current: T, var version: int = 0, val readers: array<int> = [
     }
 
     /** The value, without subscribing the scope rendering now. */
-    fun peek(): T = current
+    fun peek(): StateValue = current
 
     /** Count a change made in place, and tell whoever read the value. */
     fun touch(): void {

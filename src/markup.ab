@@ -25,7 +25,7 @@ fun uiJoin(parts: array<string>): string {
     out
 }
 
-fun <T> uiEach(items: array<T>, var render: FnMut(T) -> El): El {
+fun <EachItem> uiEach(items: array<EachItem>, var render: FnMut(EachItem) -> El): El {
     val out: array<El> = []
     for (item in items) out.append(render(item))
     fragment(out)
