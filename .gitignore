@@ -1,0 +1,7 @@
+# Build output
+**/out/
+# `ablac build` from the repository root keeps its cache here.
+build/
+**/.build-fast.ab
+site/
+.DS_Store
