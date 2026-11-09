@@ -80,6 +80,7 @@ fun ViewTree.slide(n: int, v: f64): void {
     val clamped = fmax(this.lo[n], fmin(this.hi[n], v))
     if (clamped == this.value[n]) return
     this.value[n] = clamped
+    this.stamp[n] = this.stamp[n] + 1
     this.change[n](clamped)
     return
 }

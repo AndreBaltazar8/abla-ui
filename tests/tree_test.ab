@@ -55,6 +55,37 @@ class Recorder(var boxes: int, var texts: int, var clips: int, val said: array<s
     }
 }
 
+/** Replays every node whose stamp it has seen, and counts. */
+class Replayer(val seen: array<int>, var replayed: int, var drawn: int, var calls: int) : ViewPainter {
+    fun box(x: f64, y: f64, w: f64, h: f64, look: Look, opacity: f64): void {
+        calls = calls + 1
+        return
+    }
+    fun text(face: int, t: string, start: int, end: int, x: f64, y: f64, look: Look, opacity: f64): void {
+        calls = calls + 1
+        return
+    }
+    fun image(handle: int, x: f64, y: f64, w: f64, h: f64, opacity: f64): void {
+        return
+    }
+    fun clipPush(x: f64, y: f64, w: f64, h: f64): void {
+        return
+    }
+    fun clipPop(): void {
+        return
+    }
+    fun nodeBegin(node: int, stamp: int, x: f64, y: f64, opacity: f64): bool {
+        while (seen.size <= node) seen.append(-1)
+        if (seen[node] == stamp) {
+            replayed = replayed + 1
+            return true
+        }
+        seen[node] = stamp
+        drawn = drawn + 1
+        false
+    }
+}
+
 fun recorder(): Recorder = Recorder(0, 0, 0, [], [], [], [])
 
 fun said(r: Recorder, t: string): int {
@@ -113,6 +144,13 @@ class Settings() : Component {
 }
 
 fun frame(var t: ViewTree, var e: ViewInput, var r: Recorder): void {
+    t.input(e)
+    t.update(800.0, 600.0)
+    t.paint(r)
+    return
+}
+
+fun frameWith(var t: ViewTree, var e: ViewInput, var r: Replayer): void {
     t.input(e)
     t.update(800.0, 600.0)
     t.paint(r)
@@ -233,6 +271,24 @@ fun counting(): void {
     e.x = -100.0
     frame(t, e, r)
     check(t.hot == -1 && !t.wantsPointer(), "off the UI, the world gets the pointer")
+
+    // Painters that keep what they drew: an unchanged frame replays every node.
+    var rp = Replayer([], 0, 0, 0)
+    frameWith(t, e, rp)
+    rp.replayed = 0
+    rp.drawn = 0
+    rp.calls = 0
+    frameWith(t, e, rp)
+    check(rp.drawn == 0 && rp.replayed > 5 && rp.calls == 0, "an unchanged frame replays every node and draws nothing (${rp.drawn} drawn, ${rp.replayed} replayed)")
+    e.x = t.ax[add] + 4.0
+    e.y = t.ay[add] + 4.0
+    frameWith(t, e, rp)
+    rp.drawn = 0
+    frameWith(t, e, rp)
+    t.setText(count, "count 7")
+    rp.drawn = 0
+    frameWith(t, e, rp)
+    check(rp.drawn == 1, "a new text of the same width draws only its node again (${rp.drawn})")
     return
 }
 

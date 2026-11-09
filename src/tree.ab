@@ -127,18 +127,38 @@ interface ViewPainter {
     /** Clip what follows to a rect (inside any clip already pushed) until clipPop. */
     fun clipPush(x: f64, y: f64, w: f64, h: f64): void
     fun clipPop(): void
+    /**
+     * Node `node`'s own drawing (its box, text, image, slider; not its children) starts, at
+     * (x, y) and `opacity`. `stamp` changes whenever anything it draws changes. A painter that
+     * still has what it drew for this stamp may draw that again and return true: the tree
+     * then skips the node's own calls. nodeEnd follows when it returned false.
+     */
+    fun nodeBegin(node: int, stamp: int, x: f64, y: f64, opacity: f64): bool = false
+    fun nodeEnd(node: int, x: f64, y: f64): void {
+        return
+    }
 }
 
 /** Text nodes' strings, fonts and wrapped lines; it measures them for the layout. */
 class ViewTexts(
     var font: TextFont,
     val text: array<string>, val face: array<int>, val lineH: array<f64>, val maxLines: array<int>,
-    val lines: array<TextLines>, val size: FlexSize, val noWrap: array<bool> = []
+    val lines: array<TextLines>, val size: FlexSize, val noWrap: array<bool> = [], val version: array<int> = []
 ) : FlexMeasure {
     fun measure(node: int, maxWidth: f64, maxHeight: f64): FlexSize {
+        val before = viewLinesSignature(lines[node])
         textWrap(text[node], face[node], if (noWrap[node]) FLEX_INF else maxWidth, maxLines[node], font, lines[node])
+        // The lines changed (not merely measured again): what the node draws changed.
+        if (viewLinesSignature(lines[node]) != before) version[node] = version[node] + 1
         FlexSize(lines[node].widest, f64FromInt(lines[node].starts.size) * lineH[node])
     }
+}
+
+/** The spans, widths and ellipsis of wrapped lines as one number. */
+fun viewLinesSignature(l: TextLines): f64 {
+    var h = f64FromInt(l.starts.size) + (if (l.ellipsis) 0.5 else 0.0)
+    for (i in 0 until l.starts.size) h = h * 31.0 + f64FromInt(l.starts[i] * 7919 + l.ends[i]) + l.widths[i] * 0.001
+    h
 }
 
 // Interaction states a node has itself (ON_* bits); selected and disabled come from its element.
@@ -157,6 +177,8 @@ class ViewTree(
     val ax: array<f64> = [], val ay: array<f64> = [],       // absolute position, as last painted
     val sx: array<f64> = [], val sy: array<f64> = [],       // scroll offsets
     val tx: array<f64> = [], val ty: array<f64> = [], val alpha: array<f64> = [], // per-frame translation and opacity
+    // What a node's own drawing depends on changed: its look, text, size, value, element.
+    val stamp: array<int> = [], val drawnW: array<f64> = [], val drawnH: array<f64> = [], val textSeen: array<int> = [],
     var root: int = -1, var width: f64 = 0.0, var height: f64 = 0.0,
     val changes: array<int> = [],
     val names: Map<string, int> = Map(),
@@ -216,6 +238,10 @@ fun ViewTree.newNode(parent: int): int {
         this.tx.append(0.0)
         this.ty.append(0.0)
         this.alpha.append(1.0)
+        this.stamp.append(0)
+        this.drawnW.append(-1.0)
+        this.drawnH.append(-1.0)
+        this.textSeen.append(-1)
         this.renderedIn.append(-1)
         this.texts.text.append("")
         this.texts.face.append(0)
@@ -223,6 +249,7 @@ fun ViewTree.newNode(parent: int): int {
         this.texts.maxLines.append(0)
         this.texts.lines.append(textLines())
         this.texts.noWrap.append(false)
+        this.texts.version.append(0)
     }
     this.kind[n] = EL_BOX
     this.key[n] = ""
@@ -242,6 +269,8 @@ fun ViewTree.newNode(parent: int): int {
     this.tx[n] = 0.0
     this.ty[n] = 0.0
     this.alpha[n] = 1.0
+    this.stamp[n] = this.stamp[n] + 1
+    this.drawnW[n] = -1.0
     this.renderedIn[n] = -1
     this.texts.text[n] = ""
     this.texts.maxLines[n] = 0
@@ -385,7 +414,10 @@ fun ViewTree.setProps(n: int, el: El): void {
     this.press[n] = el.onPress
     this.change[n] = el.onValue
     if (el.name != "") this.names.set(el.name, n)
-    if (changed) this.record(CH_PROPS, n, 0)
+    if (changed) {
+        this.record(CH_PROPS, n, 0)
+        this.stamp[n] = this.stamp[n] + 1
+    }
     return
 }
 
@@ -624,6 +656,7 @@ fun ViewTree.named(n: string): int {
 fun ViewTree.setText(n: int, t: string): void {
     if (n < 0 || this.texts.text[n] == t) return
     this.texts.text[n] = t
+    this.stamp[n] = this.stamp[n] + 1
     this.flex.remeasure(n)
     this.record(CH_PROPS, n, 0)
     return
@@ -646,8 +679,9 @@ fun ViewTree.setOpacity(n: int, a: f64): void {
 
 /** A slider's value (its look follows at the next paint). */
 fun ViewTree.setValue(n: int, v: f64): void {
-    if (n < 0) return
+    if (n < 0 || this.value[n] == v) return
     this.value[n] = v
+    this.stamp[n] = this.stamp[n] + 1
     return
 }
 
@@ -669,6 +703,7 @@ fun ViewTree.resolveLook(n: int, states: int, ink: int, inkA: f64): void {
         this.lookInkA[n] = inkA
         this.lookValid[n] = true
         this.resolves = this.resolves + 1
+        this.stamp[n] = this.stamp[n] + 1
     }
     return
 }
@@ -717,11 +752,21 @@ fun ViewTree.paintNode(n: int, ox: f64, oy: f64, inherited: int, ink: int, inkA:
     val clipsLook = this.looks[n].clip
     val color = this.looks[n].color
     val colorA = this.looks[n].colorA
-    if (this.looks[n].paintsBox()) painter.box(x, y, w, h, this.looks[n], a)
-    val kind = this.kind[n]
-    if (kind == EL_TEXT) this.paintText(n, x, y, w, a, painter)
-    else if (kind == EL_IMAGE && this.image[n] != 0) painter.image(this.image[n], x + this.flex.padL[n], y + this.flex.padT[n], w - this.flex.padL[n] - this.flex.padR[n], h - this.flex.padT[n] - this.flex.padB[n], a)
-    if (role == ROLE_SLIDER) this.paintSlider(n, x, y, w, h, states, a, painter)
+    // A new size or new wrapped lines change what the node draws.
+    if (w != this.drawnW[n] || h != this.drawnH[n] || this.texts.version[n] != this.textSeen[n]) {
+        this.drawnW[n] = w
+        this.drawnH[n] = h
+        this.textSeen[n] = this.texts.version[n]
+        this.stamp[n] = this.stamp[n] + 1
+    }
+    if (!painter.nodeBegin(n, this.stamp[n], x, y, a)) {
+        if (this.looks[n].paintsBox()) painter.box(x, y, w, h, this.looks[n], a)
+        val kind = this.kind[n]
+        if (kind == EL_TEXT) this.paintText(n, x, y, w, a, painter)
+        else if (kind == EL_IMAGE && this.image[n] != 0) painter.image(this.image[n], x + this.flex.padL[n], y + this.flex.padT[n], w - this.flex.padL[n] - this.flex.padR[n], h - this.flex.padT[n] - this.flex.padB[n], a)
+        if (role == ROLE_SLIDER) this.paintSlider(n, x, y, w, h, states, a, painter)
+        painter.nodeEnd(n, x, y)
+    }
     // Input: what it takes.
     var nl = cl
     var nt = ct
