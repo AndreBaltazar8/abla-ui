@@ -32,6 +32,8 @@ val EL_BOX = 0
 val EL_TEXT = 1
 val EL_IMAGE = 2
 val EL_COMPONENT = 3
+val EL_FRAGMENT = 4  // children spliced into the parent (from <If> and <For>)
+val EL_NONE = 5      // nothing: dropped from the parent's children
 
 val ROLE_NONE = 0
 val ROLE_PRESS = 1   // a button, toggle, tab or list row: onPress on a click, Enter, Space or A
@@ -70,11 +72,26 @@ class El(
 fun elMake(kind: int, s: Style, text: string, children: array<El>): El =
     El(kind, "", s, text, children, ROLE_NONE, 0.0, 0.0, 1.0, 0.0, false, false, elNothing, elNoValue, "", 0, "", null, "")
 
+/** Children with fragments spliced in and nothing (`none()`) dropped. */
+fun elVisible(children: array<El>): array<El> {
+    val out: array<El> = []
+    for (c in children) {
+        if (c.kind == EL_FRAGMENT) {
+            for (inner in elVisible(c.children)) out.append(inner)
+        } else if (c.kind != EL_NONE) out.append(c)
+    }
+    out
+}
+
 /** A box laid out by its style (a column unless the style says otherwise). */
-fun box(s: Style, children: array<El>): El = elMake(EL_BOX, s, "", children)
-fun row(s: Style, children: array<El>): El = elMake(EL_BOX, style().row().with(s), "", children)
-fun column(s: Style, children: array<El>): El = elMake(EL_BOX, style().column().with(s), "", children)
-fun stack(s: Style, children: array<El>): El = elMake(EL_BOX, style().stack().with(s), "", children)
+fun box(s: Style, children: array<El>): El = elMake(EL_BOX, s, "", elVisible(children))
+fun row(s: Style, children: array<El>): El = elMake(EL_BOX, style().row().with(s), "", elVisible(children))
+fun column(s: Style, children: array<El>): El = elMake(EL_BOX, style().column().with(s), "", elVisible(children))
+fun stack(s: Style, children: array<El>): El = elMake(EL_BOX, style().stack().with(s), "", elVisible(children))
+/** Several elements standing in for one: spliced into the parent. */
+fun fragment(children: array<El>): El = elMake(EL_FRAGMENT, style(), "", children)
+/** No element. */
+fun none(): El = elMake(EL_NONE, style(), "", [])
 fun text(t: string, s: Style): El = elMake(EL_TEXT, s, t, [])
 /** An image (the renderer's handle) sized by its style. */
 fun image(handle: int, s: Style): El =

@@ -1,0 +1,396 @@
+import "abla/compiler/parser"
+import "abla/bytes"
+import "./markup.ab"
+
+// `$ui`: XML-like component syntax, the same as abla-one's `$one` (its parser, ported), but
+// compiling to abla-ui's elements, styles and kit. A template is one element.
+//
+//   $ui
+//     <Window title="Settings" onClose={ settings.open = false } width=360 anchor="top-right" offsetX=18 offsetY=72>
+//       <Tabs labels={["Video", "Audio"]} selected={settings.tab} onChange={ settings.tab = value }/>
+//       <Toggle value={settings.shadows} onChange={ settings.shadows = value }>Shadows</Toggle>
+//       <Slider value={settings.volume} min=0 max=1 onChange={ settings.volume = value }/>
+//       <Button onPress={ reset() } tooltip="Back to the preset">Reset</Button>
+//     </Window>
+//
+// As in `$one`: attributes are style properties unless the element takes them as data
+// (title, value, labels, key, name, tooltip, selected, disabled, ...). A prefix scopes a
+// property to a state or a viewport (`hover:background="#30363d"`, `max760:gap=8`) or a
+// target (`forge:gap=8`, kept only where `uiTarget` is that target). Values: "text",
+// numbers, bare words, or {Abla expressions}. `on*={...}` handlers hold statements separated
+// by `;`; onChange receives `value` (a bool from a Toggle, a number from a Slider, an index
+// from Tabs). Capitalised tags that aren't built in call the function of that name with the
+// attribute values in order and the children (if any). <If cond={...}>…</If> <Else>…</Else>
+// and <For each={xs} as="x">…</For> control what is rendered.
+//
+// Where it differs from `$one`, and why: handlers are closures on the elements (no `ui: Ui`
+// in scope to register them with); colours are "#rrggbb[aa]" or @text / @muted / @accent
+// (abla-ui styles are numbers, not theme-resolved strings); abla-ui's own properties are
+// there too (chamfer, glow, shadow, gradient, anchor with offsetX / offsetY, solid,
+// textEffect); `size` is a box's width and height (`fontSize` sizes text).
+
+compile fun uiDslState(name: string): bool =
+    name == "pressed" || name == "hover" || name == "focus" || name == "focused" || name == "disabled" || name == "selected" || name == "checked" ||
+    uiDslViewport(name)
+
+compile fun uiDslViewport(name: string): bool {
+    if (name.size < 4 || !(name.startsWith("max") || name.startsWith("min"))) return false
+    var i = 3
+    while (i < name.size) {
+        if (name[i] < 48 || name[i] > 57) return false
+        i = i + 1
+    }
+    true
+}
+
+compile fun uiDslContainer(tag: string): bool =
+    tag == "Column" || tag == "Row" || tag == "Stack" || tag == "Box" || tag == "Scroll" || tag == "Pressable" ||
+    tag == "Window" || tag == "Panel" || tag == "List" || tag == "ListRow"
+
+compile fun uiDslTextual(tag: string): bool =
+    tag == "Text" || tag == "Label" || tag == "Caption" || tag == "Button" || tag == "Toggle"
+
+compile fun uiDslBuiltin(tag: string): bool =
+    uiDslContainer(tag) || uiDslTextual(tag) || tag == "Slider" || tag == "Tabs" || tag == "Image" ||
+    tag == "Spacer" || tag == "If" || tag == "Else" || tag == "For"
+
+// Attributes the element keeps as data (call arguments or element settings).
+compile fun uiDslData(tag: string, name: string): bool {
+    if (name == "key" || name == "name" || name == "tooltip" || name == "selected" || name == "disabled" || name == "style") return true
+    when (tag) {
+        "Pressable" -> name == "onPress"
+        "Button" -> name == "onPress"
+        "ListRow" -> name == "onPress"
+        "Toggle" -> name == "value" || name == "checked" || name == "label" || name == "onChange"
+        "Slider" -> name == "value" || name == "min" || name == "max" || name == "onChange"
+        "Tabs" -> name == "labels" || name == "onChange"
+        "Window" -> name == "title" || name == "onClose"
+        "Image" -> name == "handle"
+        "If" -> name == "cond"
+        "For" -> name == "each" || name == "as"
+        else -> false
+    }
+}
+
+class UiDslAttributes(
+    val names: array<string>,
+    val kinds: array<string>,   // string, int, bool, expr, action
+    val texts: array<string>,
+    val values: array<SyntaxExpression>
+)
+
+compile fun uiDslIndex(a: UiDslAttributes, name: string): int {
+    var i = 0
+    while (i < a.names.size) {
+        if (a.names[i] == name) return i
+        i = i + 1
+    }
+    -1
+}
+
+compile fun uiDslAction(cursor: ParserCursor, name: string): SyntaxExpression {
+    val statements: array<SyntaxExpression> = []
+    var complete = false
+    while (!complete) {
+        parserRawSkipWhitespace(cursor)
+        if (parserRawAt(cursor, "}")) complete = true
+        else {
+            statements.append(parserParseAblaExpression(cursor))
+            parserRawSkipWhitespace(cursor)
+            if (!parserRawAt(cursor, "}") && !parserRawConsume(cursor, ";")) parserFail(cursor, "$name statements are separated by `;`")
+        }
+    }
+    // Handlers return void, whatever their last statement's value is.
+    statements.append(syntaxCall("uiDone", []))
+    syntaxInferredLambda(if (name == "onChange") ["value"] else [], syntaxBlock(statements), false)
+}
+
+compile fun uiDslName(cursor: ParserCursor): string {
+    var name = parserRawTakeName(cursor)
+    while (name != "" && parserRawConsume(cursor, ":")) name = "$name:${parserRawTakeName(cursor)}"
+    name
+}
+
+compile fun uiDslAttributes(cursor: ParserCursor, var a: UiDslAttributes): bool {
+    while (true) {
+        parserRawSkipWhitespace(cursor)
+        if (parserRawConsume(cursor, "/>")) return true
+        if (parserRawConsume(cursor, ">")) return false
+        val name = uiDslName(cursor)
+        if (name == "") {
+            parserFail(cursor, "expected an attribute")
+            return true
+        }
+        parserRawSkipWhitespace(cursor)
+        if (!parserRawConsume(cursor, "=")) {
+            a.names.append(name)
+            a.kinds.append("bool")
+            a.texts.append("true")
+            a.values.append(syntaxBoolean(true))
+            continue
+        }
+        parserRawSkipWhitespace(cursor)
+        if (parserRawConsume(cursor, "\"")) {
+            val text = parserRawTakeUntil(cursor, "\"")
+            parserRawExpect(cursor, "\"")
+            a.names.append(name)
+            a.kinds.append("string")
+            a.texts.append(text)
+            a.values.append(syntaxString(text))
+        } else if (parserRawConsume(cursor, "{")) {
+            val action = name.size > 2 && name.slice(0, 2) == "on"
+            val value = if (action) uiDslAction(cursor, name) else parserParseAblaExpression(cursor)
+            parserRawSkipWhitespace(cursor)
+            parserRawExpect(cursor, "}")
+            a.names.append(name)
+            a.kinds.append(if (action) "action" else "expr")
+            a.texts.append("")
+            a.values.append(value)
+        } else {
+            val text = parserRawTakeUntil(cursor, " \t\r\n/>")
+            a.names.append(name)
+            a.kinds.append("string")
+            a.texts.append(text)
+            a.values.append(syntaxString(text))
+        }
+    }
+    true
+}
+
+// The attribute as a string expression (style values).
+compile fun uiDslString(var a: UiDslAttributes, index: int): SyntaxExpression {
+    if (a.kinds[index] == "expr") return syntaxCall("uiString", [a.values[index]])
+    syntaxString(a.texts[index])
+}
+
+compile fun uiDslValue(var a: UiDslAttributes, name: string, fallback: SyntaxExpression): SyntaxExpression {
+    val i = uiDslIndex(a, name)
+    if (i < 0) fallback else a.values[i]
+}
+
+/** A number attribute: an expression as it is, a literal through uiNumber. */
+compile fun uiDslNumber(var a: UiDslAttributes, name: string, fallback: string): SyntaxExpression {
+    val i = uiDslIndex(a, name)
+    if (i < 0) return syntaxCall("uiNumber", [syntaxString(fallback)])
+    if (a.kinds[i] == "expr") a.values[i] else syntaxCall("uiNumber", [syntaxString(a.texts[i])])
+}
+
+compile fun uiDslText(var a: UiDslAttributes, name: string, fallback: string): SyntaxExpression {
+    val i = uiDslIndex(a, name)
+    if (i < 0) syntaxString(fallback) else uiDslString(a, i)
+}
+
+compile fun uiDslStyle(cursor: ParserCursor, tag: string, var a: UiDslAttributes): SyntaxExpression {
+    var result = uiDslValue(a, "style", syntaxCall("style", []))
+    var i = 0
+    while (i < a.names.size) {
+        val name = a.names[i]
+        if (!uiDslData(tag, name)) {
+            if (a.kinds[i] == "action") parserFail(cursor, "$tag doesn't handle $name")
+            var target = ""
+            var state = ""
+            var property = name
+            var start = 0
+            var j = 0
+            while (j <= name.size) {
+                if (j == name.size || name[j] == 58) {
+                    val part = name.slice(start, j)
+                    if (j == name.size) property = part
+                    else if (uiDslState(part)) state = part
+                    else target = part
+                    start = j + 1
+                }
+                j = j + 1
+            }
+            result = syntaxCall("uiStyleSet", [result, syntaxString(target), syntaxString(state), syntaxString(property), uiDslString(a, i)])
+        }
+        i = i + 1
+    }
+    result
+}
+
+/** Settings every element takes: key, name, tooltip, selected, disabled. */
+compile fun uiDslCommon(tag: string, node: SyntaxExpression, var a: UiDslAttributes): SyntaxExpression {
+    var result = node
+    var i = 0
+    while (i < a.names.size) {
+        val name = a.names[i]
+        if (name == "key") result = syntaxCall("uiKeyed", [result, uiDslString(a, i)])
+        else if (name == "name") result = syntaxCall("uiNamed", [result, uiDslString(a, i)])
+        else if (name == "tooltip") result = syntaxCall("uiTip", [result, uiDslString(a, i)])
+        else if (name == "selected" && tag != "ListRow" && tag != "Tabs") result = syntaxCall("uiSelected", [result, a.values[i]])
+        else if (name == "disabled") result = syntaxCall("uiDisabled", [result, a.values[i]])
+        i = i + 1
+    }
+    result
+}
+
+compile fun uiDslHandler(var a: UiDslAttributes, name: string, none: string): SyntaxExpression {
+    val i = uiDslIndex(a, name)
+    if (i < 0) syntaxIdentifier(none) else a.values[i]
+}
+
+// Text content with {expressions}, whitespace collapsed like HTML.
+compile fun uiDslTextContent(cursor: ParserCursor, tag: string): SyntaxExpression {
+    val parts: array<SyntaxExpression> = []
+    var pendingSpace = false
+    var any = false
+    while (true) {
+        if (parserRawEnd(cursor)) {
+            parserFail(cursor, "unterminated $tag")
+            return syntaxString("")
+        }
+        if (parserRawAt(cursor, "</")) return syntaxCall("uiJoin", [syntaxArray(parts)])
+        if (parserRawAt(cursor, "<")) {
+            parserFail(cursor, "$tag holds text, not elements")
+            return syntaxString("")
+        }
+        if (parserRawConsume(cursor, "{")) {
+            if (pendingSpace && any) parts.append(syntaxString(" "))
+            pendingSpace = false
+            parts.append(syntaxCall("uiString", [parserParseAblaExpression(cursor)]))
+            parserRawSkipWhitespace(cursor)
+            parserRawExpect(cursor, "}")
+            any = true
+        } else {
+            val literal = parserRawTakeUntil(cursor, "<{")
+            var word = ""
+            for (b in literal) {
+                if (b == 32 || b == 9 || b == 10 || b == 13) {
+                    if (word != "") {
+                        parts.append(syntaxString(if (pendingSpace && any) " $word" else word))
+                        any = true
+                        word = ""
+                    }
+                    pendingSpace = true
+                } else {
+                    if (word == "" && pendingSpace && any) {
+                        word = " "
+                        pendingSpace = false
+                    } else if (word == "") pendingSpace = false
+                    word = uiDslAppendByte(word, b)
+                }
+            }
+            if (word != "") {
+                parts.append(syntaxString(word))
+                any = true
+            }
+        }
+    }
+    syntaxString("")
+}
+
+compile fun uiDslAppendByte(word: string, b: int): string = "$word${byteEncode(b)}"
+
+compile fun uiDslChildren(cursor: ParserCursor, tag: string): array<SyntaxExpression> {
+    val children: array<SyntaxExpression> = []
+    while (true) {
+        parserRawSkipWhitespace(cursor)
+        if (parserRawEnd(cursor)) {
+            parserFail(cursor, "unterminated $tag")
+            return children
+        }
+        if (parserRawAt(cursor, "</")) return children
+        if (parserRawAt(cursor, "<Else")) {
+            if (children.size == 0) parserFail(cursor, "<Else> must follow an <If>")
+            return children
+        }
+        if (parserRawAt(cursor, "<")) children.append(uiDslElement(cursor))
+        else if (parserRawConsume(cursor, "{")) {
+            children.append(parserParseAblaExpression(cursor))
+            parserRawSkipWhitespace(cursor)
+            parserRawExpect(cursor, "}")
+        } else {
+            val text = parserRawTakeUntil(cursor, "<{")
+            var blank = true
+            for (b in text) if (!(b == 32 || b == 9 || b == 10 || b == 13)) blank = false
+            if (!blank) parserFail(cursor, "$tag holds elements; put text in <Text>")
+        }
+    }
+    children
+}
+
+compile fun uiDslClose(cursor: ParserCursor, tag: string): void {
+    parserRawExpect(cursor, "</")
+    val closing = parserRawTakeName(cursor)
+    if (closing != tag) parserFail(cursor, "</$closing> doesn't close <$tag>")
+    parserRawSkipWhitespace(cursor)
+    parserRawExpect(cursor, ">")
+    return
+}
+
+compile fun uiDslElement(cursor: ParserCursor): SyntaxExpression {
+    parserRawSkipWhitespace(cursor)
+    parserRawExpect(cursor, "<")
+    val tag = parserRawTakeName(cursor)
+    if (tag == "" || tag[0] < 65 || tag[0] > 90) parserFail(cursor, "element names are capitalised: <$tag>")
+    var a = UiDslAttributes([], [], [], [])
+    val selfClosing = uiDslAttributes(cursor, a)
+    var content = syntaxString("")
+    var children: array<SyntaxExpression> = []
+    if (!selfClosing) {
+        if (uiDslTextual(tag)) content = uiDslTextContent(cursor, tag)
+        else children = uiDslChildren(cursor, tag)
+        uiDslClose(cursor, tag)
+    }
+    val styled = uiDslStyle(cursor, tag, a)
+    val kids = syntaxArray(children)
+    var node = when (tag) {
+        "Column" -> syntaxCall("column", [styled, kids])
+        "Row" -> syntaxCall("row", [styled, kids])
+        "Stack" -> syntaxCall("stack", [styled, kids])
+        "Box" -> syntaxCall("box", [styled, kids])
+        "Scroll" -> syntaxCall("list", [styled, kids])
+        "List" -> syntaxCall("list", [styled, kids])
+        "Panel" -> syntaxCall("panel", [styled, kids])
+        "Pressable" -> syntaxCall("uiPressable", [syntaxCall("box", [styled, kids]), uiDslHandler(a, "onPress", "uiNothing")])
+        "ListRow" -> syntaxCall("listRow", [uiDslValue(a, "selected", syntaxBoolean(false)), styled, uiDslHandler(a, "onPress", "uiNothing"), kids])
+        "Window" -> syntaxCall("windowPanel", [uiDslText(a, "title", ""), uiDslHandler(a, "onClose", "uiNothing"), styled, kids])
+        "Text" -> syntaxCall("text", [content, styled])
+        "Label" -> syntaxCall("label", [content, styled])
+        "Caption" -> syntaxCall("caption", [content, styled])
+        "Button" -> syntaxCall("button", [content, styled, uiDslHandler(a, "onPress", "uiNothing")])
+        "Toggle" -> syntaxCall("toggle", [if (uiDslIndex(a, "label") >= 0) uiDslText(a, "label", "") else content,
+            uiDslValue(a, "value", uiDslValue(a, "checked", syntaxBoolean(false))), styled, uiDslHandler(a, "onChange", "uiNoBool")])
+        "Slider" -> syntaxCall("slider", [uiDslNumber(a, "value", "0"), uiDslNumber(a, "min", "0"), uiDslNumber(a, "max", "1"), styled, uiDslHandler(a, "onChange", "uiNoNumber")])
+        "Tabs" -> syntaxCall("tabs", [uiDslValue(a, "labels", syntaxArray([])), uiDslValue(a, "selected", syntaxInteger(0)), styled, uiDslHandler(a, "onChange", "uiNoInt")])
+        "Image" -> syntaxCall("image", [uiDslValue(a, "handle", syntaxInteger(0)), styled])
+        "Spacer" -> syntaxCall("spacer", [])
+        "If" -> {
+            val chosen = syntaxCall("fragment", [kids])
+            var otherwise = syntaxCall("none", [])
+            parserRawSkipWhitespace(cursor)
+            if (parserRawConsume(cursor, "<Else")) {
+                parserRawSkipWhitespace(cursor)
+                if (!parserRawConsume(cursor, "/>")) {
+                    parserRawExpect(cursor, ">")
+                    otherwise = syntaxCall("fragment", [syntaxArray(uiDslChildren(cursor, "Else"))])
+                    uiDslClose(cursor, "Else")
+                }
+            }
+            syntaxIf(uiDslValue(a, "cond", syntaxBoolean(false)), chosen, otherwise)
+        }
+        "For" -> {
+            val i = uiDslIndex(a, "as")
+            val name = if (i >= 0) a.texts[i] else "item"
+            syntaxCall("uiEach", [uiDslValue(a, "each", syntaxArray([])), syntaxInferredLambda([name], syntaxCall("fragment", [kids]), false)])
+        }
+        else -> {
+            // A program's own component function: Name(attributes in order, children).
+            val arguments: array<SyntaxExpression> = []
+            var i = 0
+            while (i < a.names.size) {
+                arguments.append(a.values[i])
+                i = i + 1
+            }
+            if (children.size > 0) arguments.append(kids)
+            syntaxCall(tag, arguments)
+        }
+    }
+    if (uiDslBuiltin(tag) && tag != "If" && tag != "For" && tag != "Else") node = uiDslCommon(tag, node, a)
+    node
+}
+
+compile fun uiDslParse(cursor: ParserCursor): SyntaxExpression = uiDslElement(cursor)
+
+#compilerRegisterSubparser("ui", uiDslParse)

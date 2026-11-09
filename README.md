@@ -23,7 +23,9 @@ width tables and another real fonts. Painting goes through `ViewPainter`, input 
 | `src/tree.ab` | The retained tree: elements (`El`) from components' `render()`, reconciled by key into nodes that keep their layout, look and wrapped text; per-node change records (added, removed, moved, properties); the paint walk onto a `ViewPainter`; per-frame changes without a render (`setText`, `setTranslate`, `setOpacity`, `setValue`). |
 | `src/input.ab` | Input over the tree: hit testing, hover and press, sliders, focus navigation (Tab, arrows, Enter / Space, the pad), scrolling (wheel, drag), Escape closing the topmost window, tooltips. |
 | `src/kit.ab` | Window, panel, button, toggle, slider, tabs, label, caption, list, list row, tooltip, built from elements and the theme. |
+| `src/markup.ab` | What the tag syntax compiles to: attributes read as style properties, colours and keywords. |
 | `src/ui.ab` | Imports all of the above. |
+| `src/dsl.ab` | `$ui`: the tag syntax (import it where templates are written; one module is `github("AndreBaltazar8/abla-ui/dsl")`). |
 
 ## Using it
 
@@ -56,6 +58,42 @@ tree.update(width, height)
 tree.paint(painter)      // ViewPainter: boxes, text runs, images, clips
 ```
 
+### The same window in the tag syntax
+
+`$ui` is abla-one's `$one` syntax (its parser, ported): one element per template, attributes
+as style properties unless the element takes them as data, `state:` and `max760:` prefixes,
+`{expressions}`, `on*={ statements }` handlers (`onChange` receives `value`), `<If>` /
+`<Else>` / `<For>`, and capitalised tags calling a function of that name.
+
+```abla
+import github("AndreBaltazar8/abla-ui")
+import github("AndreBaltazar8/abla-ui/dsl")
+
+class SettingsWindow() : Component {
+    fun render(): El = $ui
+        <If cond={settings.open}>
+          <Window title="Settings" onClose={ settings.open = false } width=360 anchor="center">
+            <Label>Volume</Label>
+            <Slider value={settings.volume} min=0 max=1 onChange={ settings.volume = value }/>
+          </Window>
+        </If>
+}
+```
+
+Built in: `Column`, `Row`, `Stack`, `Box`, `Scroll`, `Pressable` (onPress), `Text`, `Label`,
+`Caption`, `Button` (onPress), `Toggle` (value, onChange), `Slider` (value, min, max,
+onChange), `Tabs` (labels, selected, onChange), `Window` (title, onClose), `Panel`, `List`,
+`ListRow` (selected, onPress), `Image` (handle), `Spacer`. Every element takes `key`, `name`
+(for `tree.named`), `tooltip`, `selected` and `disabled`.
+
+Where it differs from `$one`, and why: handlers are closures on the elements, so no `ui: Ui`
+needs to be in scope; colours are `"#rrggbb"` / `"#rrggbbaa"` or `@text` / `@muted` /
+`@accent` (abla-ui's styles are numbers, not strings the theme resolves later); abla-ui's own
+properties are there too (`chamfer`, `glow="8 #e9b866 0.3"`, `shadow="18 6 0.45"`, `gradient`,
+`anchor="top-right"` with `offsetX` / `offsetY`, `solid`, `textEffect`); `size` is a box's
+width and height (`fontSize` sizes text); a target prefix (`web:`) keeps an attribute only
+where `uiTarget` names that target (abla-forge is `forge`).
+
 A frame where nothing changed renders no component, lays out no node, measures no text
 and resolves no style: painting is one walk over cached boxes and text lines. A State
 change re-renders only the components that read it; a per-frame value (an fps counter, a
@@ -70,7 +108,7 @@ that counts its changes, and bump it after each edit.
 `scripts/test.sh` builds and runs every `tests/*_test.ab` natively (`ABLAC` picks the
 compiler).
 
-## Adopting it in abla-one (a proposal, not scheduled)
+## Adopting it in abla-one
 
 abla-one has its own State, Style, Node and layout (`src/core`, `src/layout`). Moving it
 onto abla-ui could go in steps, each one usable on its own:
@@ -98,3 +136,11 @@ immutable trees and string-keyed styles each render, which step 3 removes.
 ## License
 
 abla-ui is licensed under the [Mozilla Public License 2.0](LICENSE).
+
+### One grammar
+
+`src/dsl.ab` is `$one`'s parser with abla-ui's element table: the grammar (tags, attributes,
+prefixes, handlers, text content, `<If>` / `<Else>` / `<For>`) is the same code, and only the
+table of what each tag compiles to and the runtime names differ. It depends only on
+`abla/compiler/parser`, so the end state is one parser in abla-ui taking the element table as
+a parameter, with `$one` and `$ui` both registered from it.

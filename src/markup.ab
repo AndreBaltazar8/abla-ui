@@ -1,0 +1,226 @@
+// What the `$ui` syntax (dsl.ab) compiles to: ordinary functions, so generated code reads
+// like hand-written code. Attribute values arrive as text (a literal, or an expression's
+// value as text) and are read here: numbers, keywords (center, fill, row…), colours
+// ("#rgb", "#rrggbb", "#rrggbbaa", "@accent" from the theme) and lists of them.
+
+import "abla/float"
+import "abla/text"
+import "./flex.ab"
+import "./style.ab"
+import "./tree.ab"
+import "./kit.ab"
+
+/** The target a `$ui` template's target-scoped attributes (`forge:gap=8`) apply on. */
+var uiTarget = "forge"
+
+fun uiString(value: any): string = "$value"
+
+fun uiDone(): void {
+    return
+}
+
+fun uiJoin(parts: array<string>): string {
+    var out = ""
+    for (part in parts) out = "$out$part"
+    out
+}
+
+fun <T> uiEach(items: array<T>, var render: FnMut(T) -> El): El {
+    val out: array<El> = []
+    for (item in items) out.append(render(item))
+    fragment(out)
+}
+
+/** A number in text ("16", "-2.5"), 0 when it isn't one. */
+fun uiNumber(text: string): f64 {
+    var i = 0
+    var negative = false
+    if (i < text.size && text[i] == 45) {
+        negative = true
+        i = i + 1
+    }
+    var whole = 0.0
+    while (i < text.size && text[i] >= 48 && text[i] <= 57) {
+        whole = whole * 10.0 + f64FromInt(text[i] - 48)
+        i = i + 1
+    }
+    if (i < text.size && text[i] == 46) {
+        i = i + 1
+        var scale = 0.1
+        while (i < text.size && text[i] >= 48 && text[i] <= 57) {
+            whole = whole + f64FromInt(text[i] - 48) * scale
+            scale = scale / 10.0
+            i = i + 1
+        }
+    }
+    if (negative) 0.0 - whole else whole
+}
+
+fun uiHexDigit(b: int): int =
+    if (b >= 48 && b <= 57) b - 48 else if (b >= 97 && b <= 102) b - 87 else if (b >= 65 && b <= 70) b - 55 else 0
+
+/** A colour's 0xRRGGBB ("#rgb", "#rrggbb", "#rrggbbaa", "@text", "@muted", "@accent"). */
+fun uiColor(text: string): int {
+    if (text == "@text") return kitTheme.text
+    if (text == "@muted") return kitTheme.muted
+    if (text == "@accent") return kitTheme.accent
+    if (text.size == 4 && text[0] == 35) {
+        val r = uiHexDigit(text[1])
+        val g = uiHexDigit(text[2])
+        val b = uiHexDigit(text[3])
+        return (r * 17 << 16) | (g * 17 << 8) | (b * 17)
+    }
+    if (text.size >= 7 && text[0] == 35) {
+        var v = 0
+        for (i in 1 until 7) v = v * 16 + uiHexDigit(text[i])
+        return v
+    }
+    0
+}
+
+/** A colour's alpha: the last two digits of "#rrggbbaa", else 1 (0 for "transparent"). */
+fun uiAlpha(text: string): f64 {
+    if (text == "transparent") return 0.0
+    if (text == "@muted") return kitTheme.mutedA
+    if (text.size == 9 && text[0] == 35) return f64FromInt(uiHexDigit(text[7]) * 16 + uiHexDigit(text[8])) / 255.0
+    1.0
+}
+
+/** Words of a value list ("18 6 0.45", "#fff 0.5"). */
+fun uiWords(text: string): array<string> {
+    val out: array<string> = []
+    var start = -1
+    for (i in 0 until text.size + 1) {
+        val space = i == text.size || text[i] == 32 || text[i] == 9
+        if (space && start >= 0) {
+            out.append(text.slice(start, i))
+            start = -1
+        } else if (!space && start < 0) start = i
+    }
+    out
+}
+
+fun uiAlignWord(text: string): int =
+    if (text == "center") FLEX_CENTER else if (text == "end") FLEX_END else if (text == "stretch") FLEX_STRETCH
+    else if (text == "between" || text == "space-between") FLEX_BETWEEN else FLEX_START
+
+fun uiAnchorWord(text: string): int =
+    if (text == "top") FLEX_ANCHOR_TOP else if (text == "top-right") FLEX_ANCHOR_TOP_RIGHT
+    else if (text == "left") FLEX_ANCHOR_LEFT else if (text == "center") FLEX_ANCHOR_CENTER
+    else if (text == "right") FLEX_ANCHOR_RIGHT else if (text == "bottom-left") FLEX_ANCHOR_BOTTOM_LEFT
+    else if (text == "bottom") FLEX_ANCHOR_BOTTOM else if (text == "bottom-right") FLEX_ANCHOR_BOTTOM_RIGHT
+    else FLEX_ANCHOR_TOP_LEFT
+
+fun uiSize(text: string): f64 = if (text == "fill") SIZE_FILL else if (text == "content" || text == "auto") SIZE_CONTENT else uiNumber(text)
+
+fun uiWeight(text: string): f64 =
+    if (text == "bold") 700.0 else if (text == "semibold") 600.0 else if (text == "medium") 500.0
+    else if (text == "regular" || text == "normal") 400.0 else uiNumber(text)
+
+fun uiWordAt(words: array<string>, i: int, fallback: string): string = if (i < words.size) words[i] else fallback
+
+/** One attribute as style entries, the way abla-one's `$one` names them (plus abla-ui's own). */
+fun uiProperty(property: string, value: string): Style {
+    val n = uiNumber(value)
+    val w = uiWords(value)
+    when (property) {
+        "gap" -> return style().gap(n)
+        "crossGap" -> return style().set(P_CROSS_GAP, n)
+        "padding" -> return if (w.size == 4) style().paddings(uiNumber(w[3]), uiNumber(w[0]), uiNumber(w[1]), uiNumber(w[2]))
+            else if (w.size == 2) style().paddingXY(uiNumber(w[1]), uiNumber(w[0])) else style().padding(n)
+        "paddingX" -> return style().set(P_PAD_L, n).set(P_PAD_R, n)
+        "paddingY" -> return style().set(P_PAD_T, n).set(P_PAD_B, n)
+        "paddingTop" -> return style().set(P_PAD_T, n)
+        "paddingBottom" -> return style().set(P_PAD_B, n)
+        "paddingLeft" -> return style().set(P_PAD_L, n)
+        "paddingRight" -> return style().set(P_PAD_R, n)
+        "width" -> return style().width(uiSize(value))
+        "height" -> return style().height(uiSize(value))
+        "size" -> return style().size(uiSize(value), uiSize(value))
+        "fill" -> return style().fillBoth()
+        "fillWidth" -> return style().fillWidth()
+        "fillHeight" -> return style().fillHeight()
+        "minWidth" -> return style().minWidth(n)
+        "maxWidth" -> return style().maxWidth(n)
+        "minHeight" -> return style().minHeight(n)
+        "maxHeight" -> return style().maxHeight(n)
+        "grow" -> return style().grow(n)
+        "shrink" -> return style().shrink(n)
+        "align" -> return style().align(uiAlignWord(value))
+        "justify" -> return style().justify(uiAlignWord(value))
+        "alignSelf" -> return style().alignSelf(uiAlignWord(value))
+        "wrap" -> return if (value == "false") style() else style().wrap()
+        "direction" -> return if (value == "row") style().row() else if (value == "stack") style().stack() else style().column()
+        "scroll" -> return style().scroll(if (value == "x") SCROLL_X else if (value == "both") SCROLL_X | SCROLL_Y else SCROLL_Y)
+        "anchor" -> return style().set(P_ANCHOR, f64FromInt(uiAnchorWord(value)))
+        "offsetX" -> return style().set(P_OFF_X, n)
+        "offsetY" -> return style().set(P_OFF_Y, n)
+        "hidden" -> return style().hidden(value != "false")
+        "fontSize" -> return style().fontSize(n)
+        "weight" -> return style().set(P_FONT_WEIGHT, uiWeight(value))
+        "family" -> return style().family(f64ToInt(n))
+        "lineHeight" -> return style().lineHeight(n)
+        "maxLines" -> return style().maxLines(f64ToInt(n))
+        "textAlign" -> return style().textAlign(if (value == "center") TEXT_CENTER else if (value == "right" || value == "end") TEXT_RIGHT else TEXT_LEFT)
+        "color" -> return style().color(uiColor(value), uiAlpha(value))
+        "background" -> return style().fill(uiColor(value), uiAlpha(value))
+        // "#top #bottom [angle]": a two-stop gradient (angle in radians, 0 = top to bottom).
+        "gradient" -> return style().gradient(uiColor(uiWordAt(w, 0, "")), uiAlpha(uiWordAt(w, 0, "")), uiColor(uiWordAt(w, 1, "")), uiAlpha(uiWordAt(w, 1, "")), uiNumber(uiWordAt(w, 2, "0")))
+        "border" -> return style().set(P_BORDER_W, n)
+        "borderColor" -> return style().set(P_BORDER, f64FromInt(uiColor(value))).set(P_BORDER_A, uiAlpha(value))
+        "radius" -> return if (w.size == 4) style().radii(uiNumber(w[0]), uiNumber(w[1]), uiNumber(w[2]), uiNumber(w[3])) else style().radius(n)
+        "chamfer" -> return if (w.size == 4) style().chamfer(uiNumber(w[0]), uiNumber(w[1]), uiNumber(w[2]), uiNumber(w[3])) else style().chamfer(n, n, n, n)
+        // "radius #colour [alpha]"
+        "glow" -> return style().glow(uiNumber(uiWordAt(w, 0, "0")), uiColor(uiWordAt(w, 1, "#fff")), uiNumber(uiWordAt(w, 2, "1")))
+        // "blur y alpha"
+        "shadow" -> return style().shadow(uiNumber(uiWordAt(w, 0, "0")), uiNumber(uiWordAt(w, 1, "0")), uiNumber(uiWordAt(w, 2, "0.5")))
+        "hatch" -> return style().hatch(uiNumber(uiWordAt(w, 0, "0")), uiNumber(uiWordAt(w, 1, "6")))
+        // A percentage, as abla-one's.
+        "opacity" -> return style().opacity(n / 100.0)
+        "clip" -> return if (value == "false") style() else style().clip()
+        "solid" -> return if (value == "false") style() else style().solid()
+        // "shadow #colour alpha" or "outline #colour alpha"
+        "textEffect" -> return style().textFx(if (uiWordAt(w, 0, "") == "outline") TEXT_FX_OUTLINED else if (uiWordAt(w, 0, "") == "shadow") TEXT_FX_SHADOWED else TEXT_FX_PLAIN,
+            uiColor(uiWordAt(w, 1, "#000")), uiNumber(uiWordAt(w, 2, "0.8")))
+        else -> return style()
+    }
+    style()
+}
+
+/** Conditions by name: hover, pressed, focus, selected, disabled, max760, min1500 (as abla-one's). */
+fun uiCondition(state: string): int {
+    if (state == "hover") return ON_HOVER
+    if (state == "pressed") return ON_PRESSED
+    if (state == "focus" || state == "focused") return ON_FOCUSED
+    if (state == "selected" || state == "checked") return ON_SELECTED
+    if (state == "disabled") return ON_DISABLED
+    if (state.size > 3 && state.slice(0, 3) == "max") return ON_UP_TO + f64ToInt(uiNumber(state.slice(3, state.size)))
+    if (state.size > 3 && state.slice(0, 3) == "min") return ON_FROM + f64ToInt(uiNumber(state.slice(3, state.size)))
+    ON_ALWAYS
+}
+
+/** One attribute onto `base`: scoped to a target (kept only on `uiTarget`) and a state. */
+fun uiStyleSet(base: Style, target: string, state: string, property: string, value: string): Style {
+    if (target != "" && target != uiTarget) return base.with(style())
+    val inner = uiProperty(property, value)
+    if (state == "") base.with(inner) else base.on(uiCondition(state), inner)
+}
+
+fun uiKeyed(el: El, key: string): El = el.keyed(key)
+fun uiNamed(el: El, name: string): El = el.named(name)
+fun uiTip(el: El, t: string): El = el.tip(t)
+fun uiSelected(el: El, on: bool): El = el.selectedIf(on)
+fun uiDisabled(el: El, on: bool): El = el.disabledIf(on)
+fun uiPressable(el: El, f: () -> void): El = el.pressable(f)
+fun uiNothing(): void {
+    return
+}
+fun uiNoBool(v: bool): void {
+    return
+}
+fun uiNoInt(v: int): void {
+    return
+}
+fun uiNoNumber(v: f64): void {
+    return
+}

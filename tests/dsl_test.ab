@@ -1,0 +1,173 @@
+// Self-checks for the `$ui` syntax: what templates compile to, and that they render and
+// react in a tree. Exits 0 when every check passes.
+
+import "abla/io"
+import "abla/float"
+import "abla/float/text"
+import "abla/math"
+import "../src/ui.ab"
+import "../src/dsl.ab"
+
+var failed = 0
+var passed = 0
+
+fun check(ok: bool, name: string): void {
+    if (ok) passed = passed + 1
+    else {
+        println("FAIL $name")
+        failed = failed + 1
+    }
+    return
+}
+
+fun near(a: f64, b: f64): bool = fabs(a - b) < 0.001
+
+class Person(val name: string, val seed: string)
+
+fun Greeting(name: string, emphasis: bool): El = $ui
+    <Text fontSize=18 weight={if (emphasis) "bold" else "regular"}>Olá, {name}!</Text>
+
+class Demo(
+    var count: int by State(0),
+    var open: bool by State(false),
+    var shadows: bool by State(false),
+    var volume: f64 by State(0.5),
+    var tab: int by State(0),
+    var log: string by State("")
+)
+val demo = Demo()
+
+fun people(): array<Person> = [Person("Sofia Costa", "u1"), Person("André Silva", "u2")]
+
+fun note(entry: string): void {
+    demo.log = "${demo.log}$entry;"
+    return
+}
+
+fun screen(): El = $ui
+    <Column padding=16 gap=8 background="#1a1612" forge:radius=14 web:radius=99 hover:background="#30363d" max600:gap=4 key="root" name="root">
+      <Pressable onPress={ demo.count += 1; note("press") } paddingX=16 height=48 pressed:background="#000000" tooltip="Adds one">
+        <Text color=@accent maxLines=1>Count {demo.count} of {people().size}</Text>
+      </Pressable>
+      <Toggle value={demo.shadows} onChange={ demo.shadows = value }>Shadows</Toggle>
+      <Slider value={demo.volume} min=0 max=2 onChange={ demo.volume = value } name="volume"/>
+      <Tabs labels={["Video", "Audio"]} selected={demo.tab} onChange={ demo.tab = value }/>
+      <Button onPress={ demo.open = !demo.open } name="flip">Flip</Button>
+      <If cond={demo.open}>
+        <Text>Aberto</Text>
+      </If>
+      <Else>
+        <Text>Fechado</Text>
+      </Else>
+      <For each={people()} as="person">
+        <Row gap=12 key={person.seed}>
+          <Text>{person.name}</Text>
+        </Row>
+      </For>
+      <Greeting name="Sofia" emphasis={demo.count > 0} />
+      {spacer()}
+    </Column>
+
+fun window(): El = $ui
+    <Window title="Settings" onClose={ demo.open = false } width=300 anchor="center" chamfer="14 14 0 0" shadow="18 6 0.45" glow="8 #e9b866 0.3">
+      <Caption>Quality</Caption>
+      <Label textEffect="outline #000000 0.8">Hello</Label>
+    </Window>
+
+class Mono() : TextFont {
+    fun face(family: string, size: f64, weight: int): int = weight
+    fun width(face: int, text: string, start: int, end: int): f64 = f64FromInt(end - start) * 8.0
+    fun clusterEnd(text: string, i: int): int = textCodePointEnd(text, i)
+    fun lineHeight(face: int): f64 = 20.0
+}
+
+class Screen() : Component {
+    fun render(): El = screen()
+}
+
+fun makeScreen(): Component = Screen()
+
+class Nothing() : ViewPainter {
+    fun box(x: f64, y: f64, w: f64, h: f64, look: Look, opacity: f64): void {
+        return
+    }
+    fun text(face: int, t: string, start: int, end: int, x: f64, y: f64, look: Look, opacity: f64): void {
+        return
+    }
+    fun image(handle: int, x: f64, y: f64, w: f64, h: f64, opacity: f64): void {
+        return
+    }
+    fun clipPush(x: f64, y: f64, w: f64, h: f64): void {
+        return
+    }
+    fun clipPop(): void {
+        return
+    }
+}
+
+fun main: int {
+    val root = screen()
+    check(root.kind == EL_BOX && root.key == "root" && root.name == "root", "root element, key and name")
+    val s = root.style
+    check(near(s.get(P_PAD_L, 0, 800.0, 0.0), 16.0) && near(s.get(P_GAP, 0, 800.0, 0.0), 8.0), "numeric style attributes")
+    check(s.get(P_FILL, 0, 800.0, -1.0) == f64FromInt(0x1a1612), "a colour attribute")
+    check(near(s.get(P_R_TL, 0, 800.0, 0.0), 14.0), "an attribute for this target applies; another target's doesn't")
+    check(s.get(P_FILL, ON_HOVER, 800.0, -1.0) == f64FromInt(0x30363d) && s.get(P_FILL, 0, 800.0, -1.0) == f64FromInt(0x1a1612), "a state-scoped attribute")
+    check(near(s.get(P_GAP, 0, 500.0, 0.0), 4.0) && near(s.get(P_GAP, 0, 800.0, 0.0), 8.0), "a viewport-scoped attribute")
+    val press = root.children[0]
+    check(press.role == ROLE_PRESS && press.tooltip == "Adds one", "Pressable with a handler and a tooltip")
+    check(near(press.style.get(P_PAD_L, 0, 800.0, 0.0), 16.0) && near(press.style.get(P_PAD_R, 0, 800.0, 0.0), 16.0), "a shorthand expands")
+    check(press.children[0].text == "Count 0 of 2", "text interpolation (${press.children[0].text})")
+    check(press.children[0].style.get(P_COLOR, 0, 800.0, -1.0) == f64FromInt(kitTheme.accent), "a theme token colour")
+    check(root.children[1].role == ROLE_PRESS && root.children[1].children[1].text == "Shadows", "Toggle with its label")
+    check(root.children[2].role == ROLE_SLIDER && near(root.children[2].hi, 2.0) && root.children[2].name == "volume", "Slider with its range")
+    check(root.children[3].children.size == 2 && root.children[3].children[1].children[0].text == "Audio", "Tabs from an array")
+    check(root.children[5].text == "Fechado", "Else branch")
+    check(root.children[6].kind == EL_BOX && root.children[6].key == "u1", "For splices rows into the parent, with their keys")
+    check(root.children[7].children[0].text == "André Silva", "the loop variable")
+    check(root.children[8].text == "Olá, Sofia!", "a program's own component")
+    check(root.children.size == 10, "fragments flattened (${root.children.size})")
+
+    // Handlers run.
+    press.onPress()
+    check(demo.count == 1 && demo.log == "press;", "a handler's statements run, methods included")
+    root.children[1].onPress()
+    check(demo.shadows, "a toggle's onChange receives the new value")
+    root.children[2].onValue(1.5)
+    check(near(demo.volume, 1.5), "a slider's onChange receives the number")
+    root.children[3].children[1].onPress()
+    check(demo.tab == 1, "tabs' onChange receives the index")
+    root.children[4].onPress()
+    val again = screen()
+    check(again.children[5].text == "Aberto", "If branch after a state change")
+    check(again.children[8].style.get(P_FONT_WEIGHT, 0, 800.0, 0.0) == 700.0, "an expression attribute")
+
+    val w = window()
+    check(w.role == ROLE_WINDOW && w.children[0].children[0].text == "Settings", "Window with its title bar")
+    check(w.style.get(P_CHAMFER, 0, 800.0, 0.0) == 1.0 && near(w.style.get(P_R_BR, 0, 800.0, -1.0), 0.0) && near(w.style.get(P_SHADOW_BLUR, 0, 800.0, 0.0), 18.0) && near(w.style.get(P_GLOW_A, 0, 800.0, 0.0), 0.3),
+        "abla-ui's own properties: chamfer, shadow, glow")
+    check(w.style.get(P_ANCHOR, 0, 800.0, -1.0) == f64FromInt(FLEX_ANCHOR_CENTER), "anchor")
+
+    // In a tree: it renders, and a click through input reaches the handler.
+    var t = viewTree(themeDefault(), Mono())
+    var painter = Nothing()
+    var e = viewInput()
+    val unused = t.mount(comp("screen", makeScreen))
+    t.update(800.0, 600.0)
+    t.paint(painter)
+    val flip = t.named("flip")
+    e.x = t.ax[flip] + 2.0
+    e.y = t.ay[flip] + 2.0
+    e.pressed = true
+    e.down = true
+    t.input(e)
+    t.update(800.0, 600.0)
+    t.paint(painter)
+    e.pressed = false
+    e.down = false
+    e.released = true
+    t.input(e)
+    check(!demo.open, "a click on a template's button runs its handler")
+    println("dsl: $passed passed, $failed failed")
+    if (failed == 0) 0 else 1
+}
