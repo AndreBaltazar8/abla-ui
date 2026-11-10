@@ -563,7 +563,7 @@ fun scopes(): void {
     own.a = 2
     t.update(800.0, 600.0)
     check(t.renders == 0 && rendersC == 0, "a State the removed component read doesn't re-render the new one (${t.renders})")
-    check(own.^a.readers.size <= 1, "and its readers don't keep the dead scope after a change (${own.^a.readers.size})")
+    check(own.^a.readerCount() <= 1, "and its readers don't keep the dead scope after a change (${own.^a.readerCount()})")
 
     // A key spelled like an unkeyed child's place doesn't take that child's node.
     var u = viewTree(themeDefault(), Mono())

@@ -132,7 +132,8 @@ change re-renders only the components that read it; a per-frame value (an fps co
 name tag over a character) goes through `tree.named(...)` and `setText` / `setTranslate`
 without any render.
 
-State holds plain values (numbers, booleans, strings). Keep a collection beside a State
+A read works through any reference (a `val`, an immutable parameter, a field of an immutable
+object): who read a State is kept in a table by its id, not in the State. State holds plain values (numbers, booleans, strings). Keep a collection beside a State
 that counts its changes, and bump it after each edit.
 
 ## Order is deterministic

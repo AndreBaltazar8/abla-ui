@@ -1,0 +1,93 @@
+// A State reads through any reference: a `val`, an immutable parameter, a field of an
+// immutable object, two reads in one expression. A read subscribes the scope rendering now,
+// but that bookkeeping is about the reader, so it must not need a mutable receiver.
+// Exits 0 when every check passes.
+
+import "abla/io"
+import "../src/state.ab"
+
+var failed = 0
+var passed = 0
+
+fun check(ok: bool, name: string): void {
+    if (ok) passed = passed + 1
+    else {
+        println("FAIL $name")
+        failed = failed + 1
+    }
+    return
+}
+
+class Session(var actor: string by State("ana"), var shift: int by State(1), var open: bool by State(false))
+
+class Desk(val session: Session, val label: string)
+
+/** Through an immutable parameter, two States in one expression. */
+fun stamp(session: Session): string = "${session.actor}#${session.shift}"
+
+/** Through a field of an immutable object. */
+fun deskLine(desk: Desk): string = if (desk.session.open) "${desk.label}: ${desk.session.actor}" else desk.label
+
+/** A generic reader of one State through an immutable reference. */
+fun both(a: Session, b: Session): bool = a.open == b.open && a.shift == b.shift
+
+class Intent(val shift: int, val actor: string, val again: int)
+
+/** Several reads of one object's States as one call's arguments, through a val taken from a var parameter. */
+fun intentOf(var sessions: array<Session>): Intent {
+    val s = sessions[0]
+    Intent(s.shift, s.actor, s.shift)
+}
+
+fun main: int {
+    val s = Session()
+    val desk = Desk(Session(), "front")
+    check(stamp(s) == "ana#1", "a read through an immutable parameter")
+    check(deskLine(desk) == "front", "a read through a field of an immutable object")
+    check(both(s, desk.session), "reads of two objects' States in one expression")
+    var sessions = [Session()]
+    val i = intentOf(sessions)
+    check(i.shift == 1 && i.actor == "ana" && i.again == 1, "reads as one call's arguments")
+    val v = s.shift + s.shift
+    check(v == 2, "two reads of one State in one expression, through a val")
+
+    // While a scope renders, each of those reads subscribes it.
+    val scope = stateNewScope()
+    val previous = stateRead(scope)
+    val unusedStamp = stamp(s)
+    val unusedLine = deskLine(desk)
+    stateReadEnd(previous)
+    val changed: array<int> = []
+    s.shift = 2
+    stateTakeChanged(changed)
+    check(changed.size == 1 && changed[0] == scope, "a read through an immutable parameter subscribes")
+    desk.session.open = true
+    stateTakeChanged(changed)
+    check(changed.size == 1 && changed[0] == scope, "a read through a field of an immutable object subscribes")
+    desk.session.actor = "rui"
+    stateTakeChanged(changed)
+    check(changed.size == 0, "a State not read isn't subscribed (actor was read only while open was false)")
+    check(s.^actor.id != s.^shift.id && s.^shift.id != desk.session.^shift.id, "each State has its own id")
+
+    // A State that is gone is never touched again: its links to ended scopes go in a sweep.
+    val before = stateLinksLive
+    for (k in 0 until 200) {
+        val gone = Session()
+        val sc = stateNewScope()
+        val p = stateRead(sc)
+        val unusedRead = gone.actor
+        stateReadEnd(p)
+        stateEndScope(sc)
+    }
+    check(stateLinksLive < before + 100, "links to ended scopes are freed as scopes end (${stateLinksLive - before} left of 200)")
+    val held = Session()
+    val sc2 = stateNewScope()
+    val p2 = stateRead(sc2)
+    val unusedHeld = held.shift
+    stateReadEnd(p2)
+    stateEndScope(sc2)
+    held.shift = 5
+    check(held.^shift.readerCount() == 0, "a change drops an ended reader")
+    println("state reads: $passed passed, $failed failed")
+    if (failed == 0) 0 else 1
+}

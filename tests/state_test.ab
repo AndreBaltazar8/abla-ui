@@ -63,7 +63,7 @@ fun main: int {
 
     // Reads outside any scope subscribe nothing.
     val unusedOutside = s.open
-    check(s.^open.readers.size == 1, "a read outside a render subscribes nothing")
+    check(s.^open.readerCount() == 1, "a read outside a render subscribes nothing")
     val before = stateRevision()
     stateTouchAll()
     check(stateRevision() == before + 1, "touching all moves the revision")

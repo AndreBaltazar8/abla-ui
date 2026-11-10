@@ -46,6 +46,10 @@ fun stateNewScope(): int {
 /** Scope `scope` is gone (its component was removed): changes no longer queue it. */
 fun stateEndScope(scope: int): void {
     stateEnded.set(scope, true)
+    // Swept when the scopes ended since the last sweep reach a quarter of the links a sweep
+    // walks: each ended scope pays a few steps of it.
+    stateEndedSinceSweep = stateEndedSinceSweep + 1
+    if (stateEndedSinceSweep >= 64 && stateEndedSinceSweep * 4 >= stateLinkScope.size) stateSweep()
     return
 }
 
@@ -91,9 +95,123 @@ fun stateTouchAll(): void {
     return
 }
 
-class State<StateValue>(var current: StateValue, var version: int = 0, val readers: array<int> = []) {
+// Who read each State, kept apart from the State itself: a read only notes the reader, so it
+// works through any reference (a val, an immutable parameter, a field of an immutable object).
+// Per State id, a list of reader scopes in the order they first read it: links in flat arrays
+// (scope, the State's id, next, previous), a free list for the links dropped.
+val stateHead: array<int> = []      // per State id: its first link, -1 for none
+val stateLinkScope: array<int> = [] // -1: a free link
+val stateLinkId: array<int> = []
+val stateLinkNext: array<int> = []
+val stateLinkPrev: array<int> = []
+var stateLinkFree = -1
+var stateLinksLive = 0
+// Scopes ended since the links were last swept: a State that is gone is never touched again,
+// so its links to ended scopes are only freed by a sweep.
+var stateEndedSinceSweep = 0
+
+/** A new State's id (its slot in the readers' table). */
+fun stateNewId(): int {
+    stateHead.append(-1)
+    stateHead.size - 1
+}
+
+/** Note that `scope` read State `id` (once: a second read changes nothing). */
+fun stateSubscribe(id: int, scope: int): void {
+    var at = stateHead[id]
+    var last = -1
+    while (at >= 0) {
+        if (stateLinkScope[at] == scope) return
+        last = at
+        at = stateLinkNext[at]
+    }
+    var link = stateLinkFree
+    if (link >= 0) {
+        stateLinkFree = stateLinkNext[link]
+        stateLinkScope[link] = scope
+        stateLinkId[link] = id
+        stateLinkNext[link] = -1
+        stateLinkPrev[link] = last
+    } else {
+        link = stateLinkScope.size
+        stateLinkScope.append(scope)
+        stateLinkId.append(id)
+        stateLinkNext.append(-1)
+        stateLinkPrev.append(last)
+    }
+    if (last >= 0) stateLinkNext[last] = link else stateHead[id] = link
+    stateLinksLive = stateLinksLive + 1
+    return
+}
+
+/** Drop `scope` from State `id`'s readers. */
+fun stateUnsubscribe(id: int, scope: int): void {
+    var at = stateHead[id]
+    while (at >= 0) {
+        if (stateLinkScope[at] == scope) {
+            stateUnlink(at)
+            return
+        }
+        at = stateLinkNext[at]
+    }
+    return
+}
+
+/** Take link `at` out of its State's list and onto the free list. */
+fun stateUnlink(at: int): void {
+    val prev = stateLinkPrev[at]
+    val next = stateLinkNext[at]
+    if (prev >= 0) stateLinkNext[prev] = next else stateHead[stateLinkId[at]] = next
+    if (next >= 0) stateLinkPrev[next] = prev
+    stateLinkScope[at] = -1
+    stateLinkId[at] = -1
+    stateLinkNext[at] = stateLinkFree
+    stateLinkFree = at
+    stateLinksLive = stateLinksLive - 1
+    return
+}
+
+/** State `id` changed: queue its live readers, in order, and drop the ended ones. */
+fun stateNotify(id: int): void {
+    var at = stateHead[id]
+    while (at >= 0) {
+        val next = stateLinkNext[at]
+        val r = stateLinkScope[at]
+        if (stateScopeLive(r)) stateQueue(r) else stateUnlink(at)
+        at = next
+    }
+    return
+}
+
+/** How many readers State `id` holds: an ended scope counts until a change or a sweep drops it. */
+fun stateReaderCount(id: int): int {
+    var count = 0
+    var at = stateHead[id]
+    while (at >= 0) {
+        count = count + 1
+        at = stateLinkNext[at]
+    }
+    count
+}
+
+/** Free every link to an ended scope (States that are gone keep theirs until this runs). */
+fun stateSweep(): void {
+    for (at in 0 until stateLinkScope.size) {
+        val r = stateLinkScope[at]
+        if (r >= 0 && !stateScopeLive(r)) stateUnlink(at)
+    }
+    stateEndedSinceSweep = 0
+    return
+}
+
+/**
+ * A value whose changes are seen (see the top of this file). It holds only the value, its
+ * version and an id; who read it is kept in a table by that id, so reading needs no mutable
+ * reference.
+ */
+class State<StateValue>(var current: StateValue, val id: int = stateNewId(), var version: int = 0) {
     fun getValue(): StateValue {
-        if (stateReader >= 0) this.subscribe(stateReader)
+        if (stateReader >= 0) stateSubscribe(id, stateReader)
         current
     }
 
@@ -112,33 +230,21 @@ class State<StateValue>(var current: StateValue, var version: int = 0, val reade
     fun touch(): void {
         version = version + 1
         stateRevisionCount = stateRevisionCount + 1
-        // Readers whose scope ended are dropped here, so the list doesn't grow with them.
-        var kept = 0
-        for (i in 0 until readers.size) {
-            val r = readers[i]
-            if (stateScopeLive(r)) {
-                readers[kept] = r
-                kept = kept + 1
-                stateQueue(r)
-            }
-        }
-        readers.truncate(kept)
+        stateNotify(id)
         return
     }
 
     fun subscribe(scope: int): void {
-        for (r in readers) if (r == scope) return
-        readers.append(scope)
+        stateSubscribe(id, scope)
         return
     }
 
     /** Forget `scope` (it no longer exists). */
     fun unsubscribe(scope: int): void {
-        var at = -1
-        for (i in 0 until readers.size) if (readers[i] == scope) at = i
-        if (at < 0) return
-        for (i in at until readers.size - 1) readers[i] = readers[i + 1]
-        readers.truncate(readers.size - 1)
+        stateUnsubscribe(id, scope)
         return
     }
+
+    /** How many readers it holds (an ended scope until a change or a sweep drops it). */
+    fun readerCount(): int = stateReaderCount(id)
 }
