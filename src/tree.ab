@@ -124,6 +124,11 @@ interface ViewPainter {
     /** Bytes [start, end) of `text` in `face`, the line's top-left at (x, y), in `look`'s text colour and effect. */
     fun text(face: int, text: string, start: int, end: int, x: f64, y: f64, look: Look, opacity: f64): void
     fun image(handle: int, x: f64, y: f64, w: f64, h: f64, opacity: f64): void
+    /** An image in its node's look (a painter that can cut or round its corners uses them). */
+    fun imageIn(handle: int, x: f64, y: f64, w: f64, h: f64, look: Look, opacity: f64): void {
+        this.image(handle, x, y, w, h, opacity)
+        return
+    }
     /** Clip what follows to a rect (inside any clip already pushed) until clipPop. */
     fun clipPush(x: f64, y: f64, w: f64, h: f64): void
     fun clipPop(): void
@@ -763,7 +768,7 @@ fun ViewTree.paintNode(n: int, ox: f64, oy: f64, inherited: int, ink: int, inkA:
         if (this.looks[n].paintsBox()) painter.box(x, y, w, h, this.looks[n], a)
         val kind = this.kind[n]
         if (kind == EL_TEXT) this.paintText(n, x, y, w, a, painter)
-        else if (kind == EL_IMAGE && this.image[n] != 0) painter.image(this.image[n], x + this.flex.padL[n], y + this.flex.padT[n], w - this.flex.padL[n] - this.flex.padR[n], h - this.flex.padT[n] - this.flex.padB[n], a)
+        else if (kind == EL_IMAGE && this.image[n] != 0) painter.imageIn(this.image[n], x + this.flex.padL[n], y + this.flex.padT[n], w - this.flex.padL[n] - this.flex.padR[n], h - this.flex.padT[n] - this.flex.padB[n], this.looks[n], a)
         if (role == ROLE_SLIDER) this.paintSlider(n, x, y, w, h, states, a, painter)
         painter.nodeEnd(n, x, y)
     }
