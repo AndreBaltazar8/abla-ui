@@ -97,6 +97,7 @@ fun rules(): El = $ui
       <Column name="hugger" width="hug">
         <Text>wide enough</Text>
       </Column>
+      <Tabs labels={["One", "Two"]} selected={0} name="tabs"/>
       <Row name="cssbar" layout="css" height=40>
         <Text name="tall">stretched</Text>
       </Row>
@@ -285,6 +286,9 @@ fun main: int {
     check(near(rt.flex.y[mid], 10.0) && near(rt.flex.h[mid], 20.0), "a row centres its children across by default (${rt.flex.y[mid]})")
     check(near(rt.flex.w[rt.named("bar")], 800.0), "a column stretches a content-width row (${rt.flex.w[rt.named("bar")]})")
     check(near(rt.flex.w[rt.named("hugger")], 88.0), "width=hug keeps the content's width (${rt.flex.w[rt.named("hugger")]})")
+    val tabsRow = rt.named("tabs")
+    val firstTab = rt.flex.first[tabsRow]
+    check(near(rt.flex.h[firstTab], 34.0) && near(rt.flex.y[firstTab], 0.0), "tab items fill the tabs' row (${rt.flex.h[firstTab]})")
     val tall = rt.named("tall")
     check(near(rt.flex.y[tall], 0.0) && near(rt.flex.h[tall], 40.0), "layout=css stretches across, as CSS does (${rt.flex.h[tall]})")
     println("dsl: $passed passed, $failed failed")

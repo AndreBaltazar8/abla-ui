@@ -80,7 +80,7 @@ fun tabs(labels: array<string>, selected: int, s: Style, f: (int) -> void): El {
             .pressable(kitPick(f, i)).selectedIf(i == selected).keyed(labels[i]))
     }
     // The items stretch to the row's height (34 unless the style says otherwise).
-    row(style().gap(4.0).height(34.0).with(s), items)
+    row(style().gap(4.0).height(34.0).align(FLEX_STRETCH).with(s), items)
 }
 
 /** A selectable list row holding `children`; `f` runs when it is clicked or activated. */
