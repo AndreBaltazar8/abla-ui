@@ -761,6 +761,22 @@ fun caching(): void {
     t.moveBefore(again, labels[1])
     t.layout(root, 1000.0, 700.0, m)
     check(near(t.y[again], 0.0) && near(t.y[labels[1]], 20.0), "a node moved to the front lays out first")
+
+    // Text cut to its room (an ellipsis) is measured again in any other room.
+    var e = flexTree()
+    val box = e.add(-1)
+    val cut = e.add(box)
+    e.setMeasured(cut, true)
+    m.texts.set(cut, "a b")
+    e.layout(box, 200.0, 100.0, m)
+    m.calls = 0
+    e.layout(box, 150.0, 100.0, m)
+    check(m.calls == 0, "plain text in a room between its width and its last room isn't measured again")
+    e.setMeasureExact(cut, true)
+    e.layout(box, 150.0, 100.0, m)
+    m.calls = 0
+    e.layout(box, 120.0, 100.0, m)
+    check(m.calls == 1, "exact text is (${m.calls})")
     return
 }
 

@@ -99,6 +99,7 @@ val FLEX_F_HAS_TEXT = 1024 // a measured leaf's last measurement (text columns) 
 val FLEX_F_NO_STRETCH = 2048 // never stretched across a column (icons, images, spacers)
 val FLEX_F_CSS = 4096        // a container laying its children out by CSS flexbox's rules (a mode)
 val FLEX_F_INTRINSIC = 8192  // a leaf with a size of its own (iW, iH) where nothing else sets one
+val FLEX_F_EXACT = 16384     // a measured leaf whose content depends on the exact room (an ellipsis): measured again for any other
 
 // A leaf's own width as "all the room it has" (an input, a divider).
 val FLEX_INTRINSIC_ROOM = -2.0
@@ -502,6 +503,14 @@ fun FlexTree.setIntrinsic(n: int, w: f64, h: f64): void {
  *  stretch across by default, growers in any bounded room): a mode for one container. */
 fun FlexTree.setCss(n: int, on: bool): void = this.setFlag(n, FLEX_F_CSS, on)
 
+/** A measured leaf whose content depends on the exact room (text cut with an ellipsis). */
+fun FlexTree.setMeasureExact(n: int, on: bool): void {
+    if (this.has(n, FLEX_F_EXACT) == on) return
+    this.flag(n, FLEX_F_EXACT, on)
+    this.remeasure(n)
+    return
+}
+
 /** Never stretched across a column by its parent (an icon, an image, a spacer). */
 fun FlexTree.setNoStretch(n: int, on: bool): void {
     if (this.has(n, FLEX_F_NO_STRETCH) == on) return
@@ -653,8 +662,8 @@ fun FlexTree.computeOne(n: int, availW: f64, availH: f64, fixedW: f64, fixedH: f
         val roomW = (if (w >= 0.0) w else availW) - pl - pr
         val room = if (roomW < 1.0) 1.0 else roomW
         // The same content measured in any room between its last width and its last room
-        // breaks into the same lines: no need to ask again.
-        if (!(this.has(n, FLEX_F_HAS_TEXT) && room >= this.textW[n] && room <= this.textRoom[n])) {
+        // breaks into the same lines: no need to ask again (unless it is cut to the room).
+        if (!(this.has(n, FLEX_F_HAS_TEXT) && (room == this.textRoom[n] || (!this.has(n, FLEX_F_EXACT) && room >= this.textW[n] && room <= this.textRoom[n])))) {
             val s = measurer.measure(n, room, availH - pt - pb)
             this.textRoom[n] = room
             this.textW[n] = flexWhole(s.w)
