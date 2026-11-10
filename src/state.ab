@@ -1,38 +1,37 @@
-// State: values whose changes are seen. One primitive serves two ways of using it.
+// Tracked: a value whose readers re-render alone. The plain State (src/revision.ab) moves the
+// global revision and nothing else; a Tracked shares that revision and also:
 //
-// - An app re-renders when anything changed: every write that changes a value moves the
-//   global revision (`stateRevision()`), as abla-one's run loop expects.
-// - A retained tree re-renders only what read the value: while a scope renders (a
-//   component, by a scope id from stateNewScope(); `stateRead(scope)` ... `stateReadEnd()`),
-//   each State it reads
-//   remembers it, and a write that changes the value queues those scopes
-//   (`stateTakeChanged()`).
-// - A game polls one value without any render: `^name.version` moves on each change.
+// - remembers the render scopes that read it: while a scope renders (a component, by a scope
+//   id from stateNewScope(); `stateRead(scope)` ... `stateReadEnd()`), each Tracked it reads
+//   notes it, and a write that changes the value queues those scopes (`stateTakeChanged()`),
+//   so a retained tree re-renders just them;
+// - counts its own changes: `^name.version`, which a game polls without any render.
 //
-//   class Settings(var open: bool by State(false), var volume: f64 by State(0.8))
+//   class Settings(var open: bool by Tracked(false), var volume: f64 by Tracked(0.8))
 //   settings.open = true                // changed: revision + 1, readers queued
 //   settings.^volume.version            // how many times volume changed
 //   settings.^volume.peek()             // read without subscribing
 //
-// Memory: a State is its value, its version and an id (a number from a counter). Only while
+// A read is a check of whether a scope renders, and a load: it works through any reference
+// (a val, an immutable parameter, a field of an immutable object). Use State where nothing
+// re-renders by reader (abla-one's apps): its read is the load alone.
+//
+// Memory: a Tracked is its value, its version and an id (a number from a counter). Only while
 // a render scope has read it does it hold an entry in the readers' table, and that goes with
 // its last reader (a change drops ended readers; a sweep, amortized over ended scopes, drops
-// those of States that are gone). A program that never opens a scope (abla-one) keeps
-// nothing global per State.
+// those of values that are gone). A program that never opens a scope keeps nothing global per
+// Tracked.
 //
-// Threads: State is confined to one thread. Its bookkeeping is process globals, so a
-// `thread { }` that makes or reads one doesn't compile (thread.shared-global: the language
-// lets a thread reach only globals nobody can change); tests/errors/state_thread.ab holds it.
+// Threads: State and Tracked are confined to one thread. Their bookkeeping is process
+// globals, so a `thread { }` that makes or reads one doesn't compile (thread.shared-global:
+// the language lets a thread reach only globals nobody can change); tests/errors/state_thread.ab
+// holds it.
 //
-// Writes that keep the value (`==`) change nothing. State holds plain values (numbers,
-// booleans, strings); keep a collection beside a State that counts its changes
-// (`var itemsChanged by State(0)`, bumped after each edit) and read that State where the
-// collection is rendered.
+// Writes that keep the value (`==`) change nothing. Both hold plain values (numbers, booleans,
+// strings); keep a collection beside one that counts its changes (`var itemsChanged by
+// Tracked(0)`, bumped after each edit) and read that where the collection is rendered.
 
-var stateRevisionCount = 0
-
-/** Moves on every change of any State (and every `stateTouchAll`). */
-fun stateRevision(): int = stateRevisionCount
+export import "./revision.ab"
 
 /** The scope rendering now (its reads subscribe it), -1 when none. */
 var stateReader = -1
@@ -99,11 +98,6 @@ fun stateTakeChanged(var into: array<int>): void {
 /** Is anything queued? */
 fun stateHasChanges(): bool = stateChangedScopes.size > 0
 
-/** Something outside any State changed: move the revision (abla-one's oneInvalidate). */
-fun stateTouchAll(): void {
-    stateRevisionCount = stateRevisionCount + 1
-    return
-}
 
 // Who read each State, kept apart from the State itself: a read only notes the reader, so it
 // works through any reference (a val, an immutable parameter, a field of an immutable object).
@@ -238,11 +232,11 @@ fun stateSweep(): void {
 }
 
 /**
- * A value whose changes are seen (see the top of this file). It holds only the value, its
- * version and an id; who read it is kept in a table by that id, so reading needs no mutable
- * reference.
+ * A value whose readers re-render alone (see the top of this file). It holds only the value,
+ * its version and an id; who read it is kept in a table by that id, so reading needs no
+ * mutable reference.
  */
-class State<StateValue>(var current: StateValue, val id: int = stateNewId(), var version: int = 0) {
+class Tracked<StateValue>(var current: StateValue, val id: int = stateNewId(), var version: int = 0) {
     fun getValue(): StateValue {
         if (stateReader >= 0) {
             val slot = id & 63
@@ -266,6 +260,7 @@ class State<StateValue>(var current: StateValue, val id: int = stateNewId(), var
     fun touch(): void {
         version = version + 1
         stateRevisionCount = stateRevisionCount + 1
+        stateTrackedCount = stateTrackedCount + 1
         stateNotify(id)
         return
     }

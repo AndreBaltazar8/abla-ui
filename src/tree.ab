@@ -4,14 +4,14 @@
 // nothing and resolves nothing: painting it is one walk handing the cached boxes and
 // text runs to a renderer (`ViewPainter`).
 //
-//   class Hud(var fps: State<int> ...) : Component {
+//   class Hud(var fps: int by Tracked(60)) : Component {
 //       fun render(): El = column(style().padding(8.0), [text("${fps} fps", style())])
 //   }
 //   val tree = viewTree(theme, platformText)
 //   tree.mount(comp("hud", { -> Hud() }))
 //   each frame:
 //       tree.input(events)          // hit testing, hover, press, focus, scrolling (input.ab)
-//       tree.update(width, height)  // re-render what read a changed State, lay out what changed
+//       tree.update(width, height)  // re-render what read a changed Tracked (all, for a plain State), lay out what changed
 //       tree.paint(painter)         // draw
 //
 // What changes between frames without a render goes through a node directly, found by
@@ -188,6 +188,8 @@ class ViewTree(
     val changes: array<int> = [],
     val names: Map<string, int> = Map(),
     val rendered: array<int> = [], var renderPass: int = 0, val renderedIn: array<int> = [],
+    // statePlainChanges() at the last update: when it moved, every component renders again.
+    var plainSeen: int = 0,
     // Input (input.ab): hit regions from the last paint, in drawing order, with their clips.
     val hitNode: array<int> = [], val hitRect: array<f64> = [],
     val focusOrder: array<int> = [], val windows: array<int> = [], val scrollers: array<int> = [],
@@ -204,6 +206,7 @@ class ViewTree(
 
 fun viewTree(theme: Theme, font: TextFont): ViewTree {
     var t = ViewTree(flexTree(), ViewTexts(font, [], [], [], [], [], FlexSize(0.0, 0.0)), theme)
+    t.plainSeen = statePlainChanges()
 
     val r = t.newNode(-1)
     t.root = r
@@ -686,6 +689,12 @@ fun ViewTree.update(width: f64, height: f64): void {
         this.rebreak(this.root, before)
     }
     this.height = height
+    // A plain State or stateTouchAll changed: nothing knows who read it, so every component
+    // renders again (abla-one's contract: an app renders when the revision moved).
+    if (statePlainChanges() != this.plainSeen) {
+        this.plainSeen = statePlainChanges()
+        for (n in 0 until this.comp.size) if (this.comp[n] != null && this.flex.has(n, FLEX_F_LIVE)) stateQueue(this.scope[n])
+    }
     if (stateHasChanges()) {
         this.renderPass = this.renderPass + 1
         // The queue holds every tree's scopes: keep this tree's (as nodes), give back other

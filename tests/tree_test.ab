@@ -118,8 +118,20 @@ fun said(r: Recorder, t: string): int {
 
 // ── components ───────────────────────────────────────────────────────────────
 
-class Model(var count: int by State(0), var itemsRev: int by State(0), var open: bool by State(true),
-            var volume: f64 by State(0.5), var shadows: bool by State(false), var tab: int by State(0), var presses: int by State(0))
+/** A component reading a plain State (abla-one's kind): it renders again when the revision moves. */
+class PlainModel(var label: string by State("one"))
+val plainModel = PlainModel()
+var plainRenders = 0
+class PlainView() : Component {
+    fun render(): El {
+        plainRenders = plainRenders + 1
+        text(plainModel.label, style()).named("plain")
+    }
+}
+fun makePlainView(): Component = PlainView()
+
+class Model(var count: int by Tracked(0), var itemsRev: int by Tracked(0), var open: bool by Tracked(true),
+            var volume: f64 by Tracked(0.5), var shadows: bool by Tracked(false), var tab: int by Tracked(0), var presses: int by Tracked(0))
 
 val model = Model()
 val modelItems: array<string> = []
@@ -463,7 +475,7 @@ fun scrollingAndBreakpoints(): void {
 
 // ── adversarial: nodes that go away while something still points at them ─────
 
-class AdvModel(var showFps: bool by State(true), var showList: bool by State(true), var extra: int by State(0))
+class AdvModel(var showFps: bool by Tracked(true), var showList: bool by Tracked(true), var extra: int by Tracked(0))
 val adv = AdvModel()
 var advPresses = 0
 
@@ -490,7 +502,7 @@ fun makeAdvButton(): Component = AdvButton()
 
 // ── scopes across trees, stale subscriptions, identities ─────────────────────
 
-class Own(var a: int by State(0), var b: int by State(0), var c: int by State(0))
+class Own(var a: int by Tracked(0), var b: int by Tracked(0), var c: int by Tracked(0))
 val own = Own()
 var rendersA = 0
 var rendersB = 0
@@ -518,7 +530,7 @@ fun makeReadsA(): Component = ReadsA()
 fun makeReadsB(): Component = ReadsB()
 fun makeReadsC(): Component = ReadsC()
 
-class Kids(var keyed: bool by State(false)) : Component {
+class Kids(var keyed: bool by Tracked(false)) : Component {
     fun render(): El = if (!keyed) column(style(), [text("a", style()), text("b", style()).named("kid-b")])
         else column(style(), [text("c", style()).keyed("#1"), text("b", style()).named("kid-b")])
 }
@@ -704,6 +716,33 @@ fun adversarial(): void {
     return
 }
 
+/** Plain States (abla-one's): no reader is known, so a change renders every component again. */
+fun plain(): void {
+    var t = viewTree(themeDefault(), Mono())
+    val unusedPlain = t.mount(comp("plain", makePlainView))
+    val unusedCounter = t.mount(comp("counter", makeCounter))
+    t.update(800.0, 600.0)
+    val first = plainRenders
+    val countsBefore = t.renders
+    t.update(800.0, 600.0)
+    check(plainRenders == first && t.renders == countsBefore, "nothing changed: nothing renders")
+    plainModel.label = "two"
+    t.update(800.0, 600.0)
+    check(plainRenders == first + 1 && t.texts.text[t.named("plain")] == "two", "a plain State's change renders its reader again (${t.texts.text[t.named("plain")]})")
+    check(t.renders == countsBefore + 2, "and every other component, as an app renders on the revision (${t.renders - countsBefore})")
+    plainModel.label = "two"
+    t.update(800.0, 600.0)
+    check(plainRenders == first + 1, "writing the same value renders nothing")
+    stateTouchAll()
+    t.update(800.0, 600.0)
+    check(plainRenders == first + 2, "stateTouchAll renders every component again")
+    val before = t.renders
+    model.count = model.count + 1
+    t.update(800.0, 600.0)
+    check(t.renders == before + 1 && plainRenders == first + 2, "a Tracked change still renders only its reader")
+    return
+}
+
 fun main: int {
     counting()
     settings()
@@ -711,6 +750,7 @@ fun main: int {
     fontsArrive()
     adversarial()
     scopes()
+    plain()
     println("tree: $passed passed, $failed failed")
     if (failed == 0) 0 else 1
 }

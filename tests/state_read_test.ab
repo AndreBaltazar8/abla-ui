@@ -18,7 +18,7 @@ fun check(ok: bool, name: string): void {
     return
 }
 
-class Session(var actor: string by State("ana"), var shift: int by State(1), var open: bool by State(false))
+class Session(var actor: string by Tracked("ana"), var shift: int by Tracked(1), var open: bool by Tracked(false))
 
 class Desk(val session: Session, val label: string)
 

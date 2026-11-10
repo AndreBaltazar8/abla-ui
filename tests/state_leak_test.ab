@@ -24,13 +24,13 @@ fun same(a: StateTables, b: StateTables): bool =
 
 fun show(a: StateTables): string = "heads ${a.heads}, links ${a.links} of ${a.linkSlots}, ended ${a.ended}, queued ${a.queued}, changed ${a.changed}"
 
-class Session(var actor: string by State("ana"), var shift: int by State(1), var open: bool by State(false))
+class Session(var actor: string by Tracked("ana"), var shift: int by Tracked(1), var open: bool by Tracked(false))
 
-class Shared(var tick: int by State(0))
+class Shared(var tick: int by Tracked(0))
 val shared = Shared()
 
 /** A component that comes and goes (a name tag, a tooltip): reads a shared State and its own. */
-class Tag(var hits: int by State(0)) : Component {
+class Tag(var hits: int by Tracked(0)) : Component {
     fun render(): El = text("tag ${shared.tick} ${hits}", style())
 }
 fun makeTag(): Component = Tag()

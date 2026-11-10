@@ -1,0 +1,63 @@
+// The plain State (src/revision.ab), as abla-one uses it: a value whose read is a load and whose
+// change moves the global revision, nothing else. Reads through any reference; nothing global
+// kept per State. Exits 0 when every check passes.
+
+import "abla/io"
+import "../src/revision.ab"
+
+var failed = 0
+var passed = 0
+
+fun check(ok: bool, name: string): void {
+    if (ok) passed = passed + 1
+    else {
+        println("FAIL $name")
+        failed = failed + 1
+    }
+    return
+}
+
+class Shift(var actor: string by State("ana"), var session: int by State(7), var open: bool by State(false))
+
+class Area(val shift: Shift, val label: string)
+
+class Stamp(val actor: string, val session: int, val again: int)
+
+fun stampOf(shift: Shift): string = "${shift.actor}@${shift.session}"
+
+fun areaLine(area: Area): string = if (area.shift.open) "${area.label} ${area.shift.actor}" else area.label
+
+fun stampFrom(var areas: array<Area>): Stamp {
+    val s = areas[0].shift
+    Stamp(s.actor, s.session, s.session)
+}
+
+fun main: int {
+    val s = Shift()
+    val start = stateRevision()
+    s.session = 8
+    check(stateRevision() == start + 1, "a change moves the revision")
+    s.session = 8
+    check(stateRevision() == start + 1, "writing the same value changes nothing")
+    check(statePlainChanges() == stateRevision() - stateTrackedChanges(), "plain changes are the revision's moves no tracked value made")
+    stateTouchAll()
+    check(stateRevision() == start + 2, "touching all moves the revision")
+
+    // Reads through any reference.
+    check(stampOf(s) == "ana@8", "a read through an immutable parameter")
+    check(areaLine(Area(Shift(), "till")) == "till", "a read through a field of an immutable object")
+    var areas = [Area(Shift(), "back")]
+    val stamp = stampFrom(areas)
+    check(stamp.session + stamp.again == 14, "several reads as one call's arguments")
+
+    // Nothing global per State: many made, read, written and dropped move only the counter.
+    val before = stateRevision()
+    for (i in 0 until 100000) {
+        var t = Shift()
+        t.session = i + 100
+        val unused = t.actor
+    }
+    check(stateRevision() == before + 100000, "100000 States made and dropped: only the revision moved")
+    println("revision: $passed passed, $failed failed")
+    if (failed == 0) 0 else 1
+}

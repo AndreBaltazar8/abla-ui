@@ -3,7 +3,7 @@
 // or reads one doesn't compile (the language allows a thread only globals nobody can change).
 import "../../src/state.ab"
 
-class Counter(var count: int by State(0))
+class Counter(var count: int by Tracked(0))
 
 fun main: int {
     val worker = thread {

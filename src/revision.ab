@@ -1,0 +1,46 @@
+// The global revision and the plain State: what abla-one's apps run on, and the default.
+//
+// - `State<T>`: a value whose change moves the global revision. Its read is a load of the value
+//   and nothing else, so it works through any reference and costs what a field costs; nothing
+//   is kept for it anywhere but in it. An app re-renders when the revision moved.
+// - `stateTouchAll()`: something outside any State changed (an array edited in place): move the
+//   revision (abla-one's oneInvalidate).
+//
+//   class Settings(var open: bool by State(false), var query: string by State(""))
+//   settings.open = true                // changed: revision + 1
+//   settings.open = true                // the same value: nothing
+//
+// A retained tree (src/tree.ab) re-renders every component when the revision moved by a plain
+// State or stateTouchAll. A value whose readers should re-render alone is a `Tracked<T>`
+// (src/state.ab), which shares this revision.
+
+var stateRevisionCount = 0
+// Of those moves, the ones a Tracked made: the rest are plain (statePlainChanges).
+var stateTrackedCount = 0
+
+/** Moves on every change of any State or Tracked, and every stateTouchAll. */
+fun stateRevision(): int = stateRevisionCount
+
+/** How many of the revision's moves Tracked values made. */
+fun stateTrackedChanges(): int = stateTrackedCount
+
+/** How many moves a plain State or stateTouchAll made: what a tree re-renders everything for. */
+fun statePlainChanges(): int = stateRevisionCount - stateTrackedCount
+
+/** Something outside any State changed: move the revision (abla-one's oneInvalidate). */
+fun stateTouchAll(): void {
+    stateRevisionCount = stateRevisionCount + 1
+    return
+}
+
+class State<StateValue>(var current: StateValue) {
+    fun getValue(): StateValue = current
+
+    fun setValue(next: StateValue): void {
+        if (next != current) {
+            current = next
+            stateRevisionCount = stateRevisionCount + 1
+        }
+        return
+    }
+}

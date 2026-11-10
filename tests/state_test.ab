@@ -15,7 +15,7 @@ fun check(ok: bool, name: string): void {
     return
 }
 
-class Settings(var open: bool by State(false), var volume: f64 by State(0.5), var name: string by State("panda"))
+class Settings(var open: bool by Tracked(false), var volume: f64 by Tracked(0.5), var name: string by Tracked("panda"))
 
 fun main: int {
     val s = Settings()

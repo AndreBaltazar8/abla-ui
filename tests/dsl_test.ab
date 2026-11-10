@@ -34,17 +34,17 @@ fun Card(title: string, children: array<El>, tone: int = 0, width: f64 = 200.0):
       {fragment(children)}
     </Column>
 
-class Badge(val label: string, val count: int = 1, var seen: int by State(0)) : Component {
+class Badge(val label: string, val count: int = 1, var seen: int by Tracked(0)) : Component {
     fun render(): El = $ui <Text name={"badge-$label"}>{label} {count}</Text>
 }
 
 class Demo(
-    var count: int by State(0),
-    var open: bool by State(false),
-    var shadows: bool by State(false),
-    var volume: f64 by State(0.5),
-    var tab: int by State(0),
-    var log: string by State("")
+    var count: int by Tracked(0),
+    var open: bool by Tracked(false),
+    var shadows: bool by Tracked(false),
+    var volume: f64 by Tracked(0.5),
+    var tab: int by Tracked(0),
+    var log: string by Tracked("")
 )
 val demo = Demo()
 
@@ -96,12 +96,12 @@ fun window(): El = $ui
     </Window>
 
 /** A stateful class component used as a tag. */
-class Clicker(val label: string, var clicks: int by State(0)) : Component {
+class Clicker(val label: string, var clicks: int by Tracked(0)) : Component {
     fun render(): El = $ui
         <Button name={"clicker-$label"} onPress={ clicks += 1 }>{label} {clicks}</Button>
 }
 
-class Host(var round: int by State(0)) : Component {
+class Host(var round: int by Tracked(0)) : Component {
     fun render(): El = $ui
         <Column gap=4>
           <Text>round {round}</Text>

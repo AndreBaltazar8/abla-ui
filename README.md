@@ -16,7 +16,8 @@ width tables and another real fonts. Painting goes through `ViewPainter`, input 
 
 | Module | What it does |
 |---|---|
-| `src/state.ab` | `State<T>`: a value whose changes move a global revision (an app re-renders), queue the render scopes that read it (a component re-renders alone) and count its own version (a game polls one value). |
+| `src/revision.ab` | The global revision and the plain `State<T>`: a value whose read is a load and whose change moves the revision, nothing else (abla-one's apps; a retained tree renders every component again when it moves). `stateTouchAll()` for a change no State sees. |
+| `src/state.ab` | `Tracked<T>`: a value that also queues the render scopes that read it (a component re-renders alone) and counts its own version (a game polls one value); it shares the revision. |
 | `src/flex.ab` | Flex layout: rows, columns and stacks; gap, padding, align, justify, grow, shrink, wrap, min/max, scrolling axes, anchored absolute children. Each node caches its last layout and measurement; setters mark only real changes; a fixed-size node bounds a relayout to its own subtree. |
 | `src/text.ab` | Line breaking over any font (`TextFont`): spaces, long words, newlines, max lines with an ellipsis. `TableFont`: a font from per-weight advance tables, for measuring with no renderer (a server laying out HTML). |
 | `src/style.ab` | Styles as ordered (condition, property, value) entries, the last match winning: interaction states (hover, pressed, focused, selected, disabled) and viewport breakpoints (`upTo`, `from`); raw (name, value) entries a backend passes through untouched (`raw("css:color", "red")`). Resolved paint (`Look`) and the theme (`Theme`, with named styles and named scopes; `withTheme` builds a subtree with another). |
@@ -35,7 +36,7 @@ to resolve and lock it. One module of it is `github("AndreBaltazar8/abla-ui/flex
 ```abla
 import github("AndreBaltazar8/abla-ui")
 
-class Settings(var open: bool by State(true), var volume: f64 by State(0.8))
+class Settings(var open: bool by Tracked(true), var volume: f64 by Tracked(0.8))
 val settings = Settings()
 
 class SettingsWindow() : Component {
@@ -98,7 +99,7 @@ fun Card(title: string, children: array<El>, width: f64 = 200.0): El = $ui
       {fragment(children)}
     </Column>
 
-class Counter(val label: string, var clicks: int by State(0)) : Component {
+class Counter(val label: string, var clicks: int by Tracked(0)) : Component {
     fun render(): El = $ui
         <Button onPress={ clicks += 1 }>{label} {clicks}</Button>
 }
@@ -127,16 +128,21 @@ width and height (`fontSize` sizes text); a target prefix (`web:`) keeps an attr
 where `uiTarget` names that target (abla-forge is `forge`).
 
 A frame where nothing changed renders no component, lays out no node, measures no text
-and resolves no style: painting is one walk over cached boxes and text lines. A State
-change re-renders only the components that read it; a per-frame value (an fps counter, a
+and resolves no style: painting is one walk over cached boxes and text lines. A Tracked
+change re-renders only the components that read it; a plain State change (or
+`stateTouchAll()`) re-renders every component, as abla-one's apps render when the revision
+moves; a per-frame value (an fps counter, a
 name tag over a character) goes through `tree.named(...)` and `setText` / `setTranslate`
 without any render.
 
-A read works through any reference (a `val`, an immutable parameter, a field of an immutable
-object): who read a State is kept in a table by its id, not in the State, and only while a
-render scope has read it (a State nobody reads under a scope keeps nothing global). State is
-confined to one thread: a `thread { }` that touches one doesn't compile. State holds plain values (numbers, booleans, strings). Keep a collection beside a State
-that counts its changes, and bump it after each edit.
+Two delegates share one revision. `State<T>` is the default: its read is a load of the value
+and nothing else, and it keeps nothing outside itself. `Tracked<T>` is for values whose
+readers should re-render alone: who read one is kept in a table by its id, not in it, and
+only while a render scope has read it (a Tracked nobody reads under a scope keeps nothing
+global). Both read through any reference (a `val`, an immutable parameter, a field of an
+immutable object), and both are confined to one thread: a `thread { }` that touches one
+doesn't compile. Both hold plain values (numbers, booleans, strings). Keep a collection
+beside one that counts its changes, and bump it after each edit.
 
 ## Order is deterministic
 

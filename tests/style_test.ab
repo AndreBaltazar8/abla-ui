@@ -101,7 +101,7 @@ class Log(val calls: array<string>) : ViewPainter {
     }
 }
 
-class Shop(var items: int by State(5), var picked: int by State(1))
+class Shop(var items: int by Tracked(5), var picked: int by Tracked(1))
 val shop = Shop()
 
 class ShopView() : Component {
