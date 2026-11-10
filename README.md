@@ -230,6 +230,19 @@ message invalid.
 the compiler). abla-ui builds with ablac 0.2.48 and newer; the tag syntax (`src/dsl.ab`) needs
 0.2.53 or newer, and with an older compiler its checks are skipped.
 
+## Before pushing main
+
+abla-forge (the engine) and game-pandatrails build against abla-ui's main by sibling path
+(`../abla-ui`), so a push to main reaches them with no pin in between. Before pushing, run
+from each checkout and read each exit status:
+
+- `ABLAC=…/v0.2.48/installed/bin/ablac scripts/test.sh` and the same with 0.2.53 (abla-ui's
+  checks; the tag syntax's checks run only on 0.2.53);
+- `scripts/test.sh` in abla-forge (it runs abla-ui's checks again, then the engine's);
+- `game/scripts/build-client.sh` in game-pandatrails.
+
+All of them must pass. Work in progress goes on a branch (in a worktree) until they do.
+
 ## One grammar
 
 `src/grammar.ab` is the tag grammar: elements, attributes, handlers, text content, children,
