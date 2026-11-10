@@ -26,10 +26,10 @@ fun ViewTree.useTheme(t: Theme): void {
     // What is mounted was built from the old theme's styles: its components render again at the
     // next update, and its text takes the new default font.
     for (n in 0 until this.kind.size) {
-        if (!this.flex.has(n, FLEX_F_LIVE)) continue
-        if (this.comp[n] != null) stateQueue(n)
-        if (this.kind[n] == EL_TEXT) this.applyFont(n)
+        if (this.flex.has(n, FLEX_F_LIVE) && this.comp[n] != null) stateQueue(this.scope[n])
     }
+    // The new theme's families, sizes and weights: every text takes its face again.
+    this.fontsChanged()
     return
 }
 

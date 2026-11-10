@@ -3,7 +3,8 @@
 // - An app re-renders when anything changed: every write that changes a value moves the
 //   global revision (`stateRevision()`), as abla-one's run loop expects.
 // - A retained tree re-renders only what read the value: while a scope renders (a
-//   component, by its id; `stateRead(scope)` ... `stateReadEnd()`), each State it reads
+//   component, by a scope id from stateNewScope(); `stateRead(scope)` ... `stateReadEnd()`),
+//   each State it reads
 //   remembers it, and a write that changes the value queues those scopes
 //   (`stateTakeChanged()`).
 // - A game polls one value without any render: `^name.version` moves on each change.
@@ -26,9 +27,29 @@ fun stateRevision(): int = stateRevisionCount
 /** The scope rendering now (its reads subscribe it), -1 when none. */
 var stateReader = -1
 
-// Scopes queued by changes since the last stateTakeChanged, and which are queued.
+// Scopes queued by changes since the last stateTakeChanged, and which are queued (looked up,
+// never iterated: the list keeps the order).
 val stateChangedScopes: array<int> = []
-val stateQueued: array<bool> = []
+val stateQueued: Map<int, bool> = Map()
+
+// Scope ids are never reused, so two trees, or a node slot taken again, never share one.
+var stateScopeCount = 0
+// Scopes that ended: nothing renders under them again, and States drop them as readers.
+val stateEnded: Map<int, bool> = Map()
+
+/** A new scope id, unique for the program's life. */
+fun stateNewScope(): int {
+    stateScopeCount = stateScopeCount + 1
+    stateScopeCount
+}
+
+/** Scope `scope` is gone (its component was removed): changes no longer queue it. */
+fun stateEndScope(scope: int): void {
+    stateEnded.set(scope, true)
+    return
+}
+
+fun stateScopeLive(scope: int): bool = !(stateEnded.get(scope) ?? false)
 
 /** Start recording reads for `scope` (an id >= 0 the caller owns); returns the previous reader. */
 fun stateRead(scope: int): int {
@@ -44,9 +65,8 @@ fun stateReadEnd(previous: int): void {
 }
 
 fun stateQueue(scope: int): void {
-    while (stateQueued.size <= scope) stateQueued.append(false)
-    if (stateQueued[scope]) return
-    stateQueued[scope] = true
+    if (scope < 0 || !stateScopeLive(scope) || (stateQueued.get(scope) ?? false)) return
+    stateQueued.set(scope, true)
     stateChangedScopes.append(scope)
     return
 }
@@ -56,7 +76,7 @@ fun stateTakeChanged(var into: array<int>): void {
     into.clear()
     for (s in stateChangedScopes) {
         into.append(s)
-        stateQueued[s] = false
+        stateQueued.set(s, false)
     }
     stateChangedScopes.clear()
     return
@@ -92,7 +112,17 @@ class State<StateValue>(var current: StateValue, var version: int = 0, val reade
     fun touch(): void {
         version = version + 1
         stateRevisionCount = stateRevisionCount + 1
-        for (r in readers) stateQueue(r)
+        // Readers whose scope ended are dropped here, so the list doesn't grow with them.
+        var kept = 0
+        for (i in 0 until readers.size) {
+            val r = readers[i]
+            if (stateScopeLive(r)) {
+                readers[kept] = r
+                kept = kept + 1
+                stateQueue(r)
+            }
+        }
+        readers.truncate(kept)
         return
     }
 

@@ -488,6 +488,106 @@ class AdvButton() : Component {
 }
 fun makeAdvButton(): Component = AdvButton()
 
+// ── scopes across trees, stale subscriptions, identities ─────────────────────
+
+class Own(var a: int by State(0), var b: int by State(0), var c: int by State(0))
+val own = Own()
+var rendersA = 0
+var rendersB = 0
+var rendersC = 0
+
+class ReadsA() : Component {
+    fun render(): El {
+        rendersA = rendersA + 1
+        text("a ${own.a}", style())
+    }
+}
+class ReadsB() : Component {
+    fun render(): El {
+        rendersB = rendersB + 1
+        text("b ${own.b}", style())
+    }
+}
+class ReadsC() : Component {
+    fun render(): El {
+        rendersC = rendersC + 1
+        text("c ${own.c}", style())
+    }
+}
+fun makeReadsA(): Component = ReadsA()
+fun makeReadsB(): Component = ReadsB()
+fun makeReadsC(): Component = ReadsC()
+
+class Kids(var keyed: bool by State(false)) : Component {
+    fun render(): El = if (!keyed) column(style(), [text("a", style()), text("b", style()).named("kid-b")])
+        else column(style(), [text("c", style()).keyed("#1"), text("b", style()).named("kid-b")])
+}
+val kids = Kids()
+fun makeKids(): Component = kids
+
+/** A font whose face is told apart by family. */
+class Families() : TextFont {
+    fun face(family: string, size: f64, weight: int): int = family.size
+    fun width(face: int, text: string, start: int, end: int): f64 = f64FromInt(end - start) * 8.0
+    fun clusterEnd(text: string, i: int): int = textCodePointEnd(text, i)
+    fun lineHeight(face: int): f64 = 20.0
+}
+
+fun scopes(): void {
+    // Two trees, the same node index in each holding a component: each renders its own.
+    var ta = viewTree(themeDefault(), Mono())
+    var tb = viewTree(themeDefault(), Mono())
+    var r = recorder()
+    val unusedA = ta.mount(comp("a", makeReadsA))
+    val unusedB = tb.mount(comp("b", makeReadsB))
+    ta.update(800.0, 600.0)
+    tb.update(800.0, 600.0)
+    rendersA = 0
+    rendersB = 0
+    own.a = 1
+    own.b = 1
+    ta.update(800.0, 600.0)
+    tb.update(800.0, 600.0)
+    check(rendersA == 1 && rendersB == 1, "two trees each re-render their own component (a ${rendersA}, b ${rendersB})")
+
+    // A removed component's subscription doesn't reach the node that takes its slot.
+    var t = viewTree(themeDefault(), Mono())
+    val first = t.mount(comp("a", makeReadsA))
+    t.update(800.0, 600.0)
+    t.unmount(first)
+    val second = t.mount(comp("c", makeReadsC))
+    t.update(800.0, 600.0)
+    check(second == first, "the slot is reused (so the check below means something)")
+    rendersC = 0
+    t.renders = 0
+    own.a = 2
+    t.update(800.0, 600.0)
+    check(t.renders == 0 && rendersC == 0, "a State the removed component read doesn't re-render the new one (${t.renders})")
+    check(own.^a.readers.size <= 1, "and its readers don't keep the dead scope after a change (${own.^a.readers.size})")
+
+    // A key spelled like an unkeyed child's place doesn't take that child's node.
+    var u = viewTree(themeDefault(), Mono())
+    val unusedKids = u.mount(comp("kids", makeKids))
+    u.update(800.0, 600.0)
+    val before = u.named("kid-b")
+    kids.keyed = true
+    u.update(800.0, 600.0)
+    check(u.named("kid-b") == before && u.texts.text[before] == "b", "a child keyed \"#1\" doesn't take the unkeyed child's node")
+
+    // useTheme with another font family moves text to its face.
+    var v = viewTree(themeDefault(), Families())
+    val unusedText = v.mount(text("hello", style()).named("hello"))
+    v.update(800.0, 600.0)
+    val n = v.named("hello")
+    val oldFace = v.texts.face[n]
+    val other = themeDefault()
+    other.families[0] = "a family with a much longer name"
+    v.useTheme(other)
+    v.update(800.0, 600.0)
+    check(v.texts.face[n] != oldFace, "useTheme with another family moves text to its face")
+    return
+}
+
 fun adversarial(): void {
     // A name goes with its node: once the node is gone the name finds nothing, even when
     // another node has taken its slot.
@@ -610,6 +710,7 @@ fun main: int {
     scrollingAndBreakpoints()
     fontsArrive()
     adversarial()
+    scopes()
     println("tree: $passed passed, $failed failed")
     if (failed == 0) 0 else 1
 }

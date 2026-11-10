@@ -196,6 +196,9 @@ class ViewTree(
     var dragScroll: int = -1, var dragGrab: f64 = 0.0, var pressX: f64 = 0.0, var pressY: f64 = 0.0,
     var layouts: int = 0, var renders: int = 0, var resolves: int = 0,
     val nameOf: array<string> = [],    // the name each node was given (`El.named`), "" for none
+    // A component node's State scope (stateNewScope: unique across trees and never reused), -1
+    // for none; and back from a scope to its node.
+    val scope: array<int> = [], val scopeNode: Map<int, int> = Map(),
     var changesTaken: bool = false     // a renderer takes the change records (takeChanges)
 )
 
@@ -251,6 +254,7 @@ fun ViewTree.newNode(parent: int): int {
         this.textSeen.append(-1)
         this.renderedIn.append(-1)
         this.nameOf.append("")
+        this.scope.append(-1)
         this.texts.text.append("")
         this.texts.face.append(0)
         this.texts.lineH.append(0.0)
@@ -281,17 +285,20 @@ fun ViewTree.newNode(parent: int): int {
     this.drawnW[n] = -1.0
     this.renderedIn[n] = -1
     this.nameOf[n] = ""
+    this.scope[n] = -1
     this.texts.text[n] = ""
     this.texts.maxLines[n] = 0
     this.texts.noWrap[n] = false
     n
 }
 
-/** How many change records are kept while no renderer has ever taken them. */
+/** How many change records are held, at most, while no renderer has ever taken them (then they
+ *  are dropped together; a renderer taking them from its first frame never loses one). */
 val VIEW_CHANGES_KEPT = 4096
 
 fun ViewTree.record(op: int, n: int, extra: int): void {
-    // Nobody takes them (a painter that draws from the tree needs none): don't keep them all for ever.
+    // Nobody takes them (a painter that draws from the tree needs none): don't keep them all for
+    // ever. Until a first takeChanges, at most VIEW_CHANGES_KEPT records are held, then dropped.
     if (!this.changesTaken && this.changes.size >= VIEW_CHANGES_KEPT * 3) this.changes.clear()
     this.changes.append(op)
     this.changes.append(n)
@@ -341,6 +348,11 @@ fun ViewTree.forget(n: int): void {
     }
     this.comp[n] = null
     this.renderedIn[n] = -1
+    if (this.scope[n] >= 0) {
+        stateEndScope(this.scope[n])
+        this.scopeNode.remove(this.scope[n])
+        this.scope[n] = -1
+    }
     if (this.nameOf[n] != "") {
         if ((this.names.get(this.nameOf[n]) ?? -1) == n) this.names.remove(this.nameOf[n])
         this.nameOf[n] = ""
@@ -385,7 +397,10 @@ fun ViewTree.reconcile(n: int, el: El): void {
         this.key[n] = el.key
         if (this.comp[n] == null) {
             val make = el.make
-            if (make != null) this.comp[n] = make()
+            if (make != null) {
+                this.comp[n] = make()
+                this.newScope(n)
+            }
         }
         this.renderComponent(n)
         return
@@ -395,13 +410,21 @@ fun ViewTree.reconcile(n: int, el: El): void {
     return
 }
 
+/** Give component node `n` a scope of its own: what it reads while rendering subscribes it. */
+fun ViewTree.newScope(n: int): void {
+    val sc = stateNewScope()
+    this.scope[n] = sc
+    this.scopeNode.set(sc, n)
+    return
+}
+
 /** Render component node `n` again (its reads subscribe it) and reconcile what it gives. */
 fun ViewTree.renderComponent(n: int): void {
     val c = this.comp[n]
     if (c == null) return
     this.renders = this.renders + 1
     this.renderedIn[n] = this.renderPass
-    val previous = stateRead(n)
+    val previous = stateRead(this.scope[n])
     val out = c.render()
     stateReadEnd(previous)
     if (out.kind == EL_COMPONENT) {
@@ -561,8 +584,9 @@ fun ViewTree.applyBoxFont(n: int): void {
     return
 }
 
-/** An element's identity among its siblings: its key, else its place. */
-fun elIdentity(el: El, index: int): string = if (el.key != "") el.key else "#$index"
+/** An element's identity among its siblings: its key, else its place, in two spellings no key
+ *  can make the same ("k" + key, "i" + place). */
+fun elIdentity(el: El, index: int): string = if (el.key != "") "k$" + el.key else "i$index"
 
 /** Reconcile `n`'s children with `els`: same identity (and kind / component type) keeps a node. */
 fun ViewTree.reconcileChildren(n: int, els: array<El>): void {
@@ -627,7 +651,10 @@ fun ViewTree.reconcileChild(node: int, el: El): void {
         this.type[node] = el.type
         if (this.comp[node] == null) {
             val make = el.make
-            if (make != null) this.comp[node] = make()
+            if (make != null) {
+                this.comp[node] = make()
+                this.newScope(node)
+            }
         }
         // Rendered again with its parent (it may read what the parent passed it), once a pass.
         if (this.renderedIn[node] != this.renderPass) this.renderComponent(node)
@@ -639,7 +666,7 @@ fun ViewTree.reconcileChild(node: int, el: El): void {
     return
 }
 
-fun ViewTree.identityOf(node: int, index: int): string = if (this.key[node] != "") this.key[node] else "#$index"
+fun ViewTree.identityOf(node: int, index: int): string = if (this.key[node] != "") "k$" + this.key[node] else "i$index"
 
 fun ViewTree.sameKind(node: int, el: El): bool =
     if (el.kind == EL_COMPONENT) this.comp[node] != null && this.type[node] == el.type
@@ -661,7 +688,16 @@ fun ViewTree.update(width: f64, height: f64): void {
     this.height = height
     if (stateHasChanges()) {
         this.renderPass = this.renderPass + 1
-        stateTakeChanged(this.rendered)
+        // The queue holds every tree's scopes: keep this tree's (as nodes), give back other
+        // trees' live ones; ended ones are dropped.
+        val taken: array<int> = []
+        stateTakeChanged(taken)
+        this.rendered.clear()
+        for (sc in taken) {
+            val node = this.scopeNode.get(sc) ?? -1
+            if (node >= 0) this.rendered.append(node)
+            else if (stateScopeLive(sc)) stateQueue(sc)
+        }
         // Shallowest first: a parent's render renders its child components with it.
         var pending = this.rendered.size
         while (pending > 0) {
@@ -715,8 +751,8 @@ fun ViewTree.rebreak(n: int, before: f64): void {
 }
 
 /** Hand the recorded changes (op, node, extra triples) to `into` and forget them. A renderer
- *  that keeps objects per node takes them every frame; until a first take only the newest
- *  VIEW_CHANGES_KEPT records are kept (a tree nobody takes them from must not grow for ever). */
+ *  that keeps objects per node takes them every frame, from its first; until a first take at
+ *  most VIEW_CHANGES_KEPT records are held (a tree nobody takes them from must not grow for ever). */
 fun ViewTree.takeChanges(var into: array<int>): void {
     this.changesTaken = true
     into.clear()
