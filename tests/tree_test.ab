@@ -29,6 +29,29 @@ class Mono() : TextFont {
     fun lineHeight(face: int): f64 = 20.0
 }
 
+/** A font whose advance can change, as when a font file arrives. */
+class Growing(var advance: f64) : TextFont {
+    fun face(family: string, size: f64, weight: int): int = 0
+    fun width(face: int, text: string, start: int, end: int): f64 = f64FromInt(end - start) * advance
+    fun clusterEnd(text: string, i: int): int = textCodePointEnd(text, i)
+    fun lineHeight(face: int): f64 = advance * 2.5
+}
+
+fun fontsArrive(): void {
+    var t = viewTree(themeDefault(), Growing(8.0))
+    var r = recorder()
+    var e = viewInput()
+    val unused = t.mount(text("hello", style()).named("hello"))
+    frame(t, e, r)
+    val n = t.named("hello")
+    check(near(t.flex.w[n], 40.0) && near(t.flex.h[n], 20.0), "text measured with the first font")
+    t.texts.font = Growing(10.0)
+    t.fontsChanged()
+    frame(t, e, r)
+    check(near(t.flex.w[n], 50.0) && near(t.flex.h[n], 25.0), "fontsChanged measures text again with the new metrics (${t.flex.w[n]} × ${t.flex.h[n]})")
+    return
+}
+
 /** Records what is painted. */
 class Recorder(var boxes: int, var texts: int, var clips: int, val said: array<string>, val textX: array<f64>, val textY: array<f64>, val boxRgb: array<int>) : ViewPainter {
     fun box(x: f64, y: f64, w: f64, h: f64, look: Look, opacity: f64): void {
@@ -442,6 +465,7 @@ fun main: int {
     counting()
     settings()
     scrollingAndBreakpoints()
+    fontsArrive()
     println("tree: $passed passed, $failed failed")
     if (failed == 0) 0 else 1
 }

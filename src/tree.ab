@@ -478,6 +478,22 @@ fun ViewTree.applyFont(n: int): void {
     return
 }
 
+/**
+ * The fonts changed (a font file arrived, the platform measured its faces again): every text
+ * node takes its face's metrics again and is measured again.
+ */
+fun ViewTree.fontsChanged(): void {
+    for (n in 0 until this.kind.size) {
+        if (this.kind[n] == EL_TEXT && this.flex.has(n, FLEX_F_LIVE)) {
+            this.texts.lineH[n] = 0.0
+            this.applyFont(n)
+            this.flex.remeasure(n)
+            this.stamp[n] = this.stamp[n] + 1
+        }
+    }
+    return
+}
+
 /** Box nodes carry their font for their text children to inherit. */
 fun ViewTree.applyBoxFont(n: int): void {
     val s = this.style[n]
