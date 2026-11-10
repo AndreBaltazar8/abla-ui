@@ -201,8 +201,8 @@ What abla-one and NovaKind rely on, each held by a test:
   the compiler enforces the confinement: a `thread { }` that makes or reads either, directly or
   through what it calls, doesn't compile (`thread.shared-global`;
   `tests/errors/state_thread.ab`). Native code calling in from a thread the program didn't
-  start is outside that check. Abla has no cheap way to ask which thread is running, so there
-  is no run-time assertion.
+  start is outside that check. The standard library (0.2.48, 0.2.53) has no public query for
+  the running thread, so there is no run-time assertion.
 - The order a backend reads is the program's (below), and data from a wire takes defaults
   (below).
 
