@@ -184,7 +184,6 @@ class FlexTree(
     val textRoom: array<f64>, val textW: array<f64>, val textH: array<f64>,
     // Caches: inputs (available, exact) and result of the last layout and measurement.
     val lay: array<f64>,  // 6 per node: availW, availH, exactW, exactH, w, h
-    val meas: array<f64>, // the same for the last measurement
     val free: array<int>,
     val pending: array<int>,
     var computed: int,
@@ -213,7 +212,7 @@ fun flexTree(): FlexTree = FlexTree(
     [], [],
     [], [], [],
     [], [],
-    [], [],
+    [],
     0, 0.0, 0.0,
     0.0, 0.0,
     0, [],
@@ -269,42 +268,40 @@ fun FlexTree.fresh(n: int, p: int): void {
     this.h[n] = 0.0
     this.contentW[n] = 0.0
     this.contentH[n] = 0.0
-    for (i in 0 until 6) {
-        this.lay[n * 6 + i] = 0.0
-        this.meas[n * 6 + i] = 0.0
-    }
+    // lay holds nothing until FLEX_F_HAS_LAYOUT says so.
     return
 }
 
 fun FlexTree.grow1(): int {
+    // A new slot, appended with a fresh node's values (fresh() is for a slot taken again).
     val n = this.parent.size
     this.parent.append(-1)
     this.first.append(-1)
     this.last.append(-1)
     this.next.append(-1)
     this.prev.append(-1)
-    this.flags.append(0)
-    this.dir.append(0)
+    this.flags.append(FLEX_F_DIRTY | FLEX_F_LIVE)
+    this.dir.append(FLEX_COLUMN)
     this.gap.append(0.0)
     this.crossGap.append(0.0)
     this.padL.append(0.0)
     this.padT.append(0.0)
     this.padR.append(0.0)
     this.padB.append(0.0)
-    this.wMode.append(0)
+    this.wMode.append(FLEX_CONTENT)
     this.w0.append(0.0)
-    this.hMode.append(0)
+    this.hMode.append(FLEX_CONTENT)
     this.h0.append(0.0)
     this.minW.append(0.0)
-    this.maxW.append(0.0)
+    this.maxW.append(FLEX_INF)
     this.minH.append(0.0)
-    this.maxH.append(0.0)
+    this.maxH.append(FLEX_INF)
     this.grow.append(0.0)
-    this.shrink.append(0.0)
-    this.align.append(0)
-    this.justify.append(0)
-    this.alignSelf.append(0)
-    this.anchor.append(0)
+    this.shrink.append(1.0)
+    this.align.append(FLEX_AUTO)
+    this.justify.append(FLEX_START)
+    this.alignSelf.append(FLEX_AUTO)
+    this.anchor.append(FLEX_ANCHOR_TOP_LEFT)
     this.offX.append(0.0)
     this.offY.append(0.0)
     this.iW.append(-1.0)
@@ -319,10 +316,7 @@ fun FlexTree.grow1(): int {
     this.textW.append(0.0)
     this.textH.append(0.0)
     this.freshAt.append(0)
-    for (i in 0 until 6) {
-        this.lay.append(0.0)
-        this.meas.append(0.0)
-    }
+    for (i in 0 until 6) this.lay.append(0.0)
     n
 }
 
@@ -332,8 +326,8 @@ fun FlexTree.add(p: int): int {
     if (this.free.size > 0) {
         n = this.free[this.free.size - 1]
         this.free.truncate(this.free.size - 1)
+        this.fresh(n, -1)
     } else n = this.grow1()
-    this.fresh(n, -1)
     if (p >= 0) this.attach(n, p, -1)
     n
 }
