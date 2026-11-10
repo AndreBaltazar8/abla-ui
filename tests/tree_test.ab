@@ -461,11 +461,155 @@ fun scrollingAndBreakpoints(): void {
     return
 }
 
+// ── adversarial: nodes that go away while something still points at them ─────
+
+class AdvModel(var showFps: bool by State(true), var showList: bool by State(true), var extra: int by State(0))
+val adv = AdvModel()
+var advPresses = 0
+
+/** A HUD whose parts come and go: an fps line, a scrolling list, and any number of labels. */
+class AdvHud() : Component {
+    fun render(): El {
+        val kids: array<El> = []
+        if (adv.showFps) kids.append(text("60 fps", style()).named("fps").keyed("fps"))
+        if (adv.showList) {
+            val rows: array<El> = []
+            for (i in 0 until 20) rows.append(text("row $i", style().height(20.0)))
+            kids.append(list(style().height(100.0).width(200.0), rows).named("advlist").keyed("list"))
+        }
+        for (i in 0 until adv.extra) kids.append(text("label $i", style()).keyed("label$i"))
+        column(style(), kids)
+    }
+}
+fun makeAdvHud(): Component = AdvHud()
+
+class AdvButton() : Component {
+    fun render(): El = button("ok", style().width(80.0), { -> advPresses = advPresses + 1 }).named("ok")
+}
+fun makeAdvButton(): Component = AdvButton()
+
+fun adversarial(): void {
+    // A name goes with its node: once the node is gone the name finds nothing, even when
+    // another node has taken its slot.
+    var t = viewTree(themeDefault(), Mono())
+    var r = recorder()
+    var e = viewInput()
+    adv.showFps = true
+    adv.showList = false
+    adv.extra = 0
+    val unusedHud = t.mount(comp("advhud", makeAdvHud))
+    frame(t, e, r)
+    val fps = t.named("fps")
+    check(fps >= 0 && t.texts.text[fps] == "60 fps", "a named node is found")
+    adv.showFps = false
+    adv.extra = 3
+    frame(t, e, r)
+    val after = t.named("fps")
+    check(after < 0, "a removed node's name finds nothing (it found node $after, which says \"${if (after >= 0) t.texts.text[after] else ""}\")")
+    t.setText(t.named("fps"), "59 fps")
+    clearRec(r)
+    frame(t, e, r)
+    check(said(r, "59 fps") < 0 && said(r, "label 0") >= 0 && said(r, "label 1") >= 0 && said(r, "label 2") >= 0, "text set through a removed node's name lands nowhere")
+
+    // A scroller removed in the middle of a drag: the drag ends, and whatever takes its slot isn't scrolled.
+    var t2 = viewTree(themeDefault(), Mono())
+    var e2 = viewInput()
+    adv.showFps = false
+    adv.showList = true
+    adv.extra = 0
+    val unusedHud2 = t2.mount(comp("advhud", makeAdvHud))
+    frame(t2, e2, r)
+    e2.x = 50.0
+    e2.y = 60.0
+    e2.pressed = true
+    e2.down = true
+    frame(t2, e2, r)
+    e2.pressed = false
+    e2.y = 30.0
+    frame(t2, e2, r)
+    val l = t2.named("advlist")
+    check(l >= 0 && t2.dragScroll == l && near(t2.sy[l], 30.0), "a drag scrolls the list")
+    adv.showList = false
+    adv.extra = 4
+    frame(t2, e2, r)
+    e2.y = 10.0
+    frame(t2, e2, r)
+    var scrolled = 0
+    for (n in 0 until t2.sy.size) if (t2.flex.has(n, FLEX_F_LIVE) && t2.sy[n] != 0.0) scrolled = scrolled + 1
+    check(t2.dragScroll < 0 && scrolled == 0, "a drag ends with its scroller (drag on node ${t2.dragScroll}, $scrolled live nodes scrolled)")
+    e2.down = false
+    e2.released = true
+    frame(t2, e2, r)
+    e2.released = false
+
+    // Unmounted between frames: the regions of the last paint are no longer anything to hover or press.
+    var t3 = viewTree(themeDefault(), Mono())
+    var e3 = viewInput()
+    advPresses = 0
+    val mounted = t3.mount(comp("advbutton", makeAdvButton))
+    frame(t3, e3, r)
+    val ok = t3.named("ok")
+    e3.x = t3.ax[ok] + 10.0
+    e3.y = t3.ay[ok] + 10.0
+    frame(t3, e3, r)
+    check(t3.hot == ok, "the pointer is over the button")
+    t3.unmount(mounted)
+    val unusedSecond = t3.mount(comp("advbutton", makeAdvButton))
+    e3.pressed = true
+    e3.down = true
+    t3.input(e3)
+    check(t3.hot < 0 && t3.active < 0, "nothing is hovered or pressed through the regions of an unmounted node (hot ${t3.hot}, active ${t3.active})")
+    e3.pressed = false
+    e3.down = false
+    e3.released = true
+    t3.input(e3)
+    e3.released = false
+    check(advPresses == 0, "and no handler runs ($advPresses presses)")
+
+    // A new theme restyles what is mounted, not only what renders afterwards.
+    var t4 = viewTree(themeDefault(), Mono())
+    var e4 = viewInput()
+    t4.useTheme(themeDefault())
+    val unusedButton = t4.mount(comp("advbutton", makeAdvButton))
+    clearRec(r)
+    frame(t4, e4, r)
+    var sawOld = false
+    for (c in r.boxRgb) if (c == 0x21262d) sawOld = true
+    check(sawOld, "the button is drawn in the theme's fill")
+    val other = themeDefault()
+    other.button = style().row().height(34.0).fill(0xaa0000, 1.0)
+    other.fontSize = 30.0
+    t4.useTheme(other)
+    clearRec(r)
+    frame(t4, e4, r)
+    var sawNew = false
+    sawOld = false
+    for (c in r.boxRgb) {
+        if (c == 0xaa0000) sawNew = true
+        if (c == 0x21262d) sawOld = true
+    }
+    check(sawNew && !sawOld, "useTheme restyles a mounted button (new fill $sawNew, old fill $sawOld)")
+    t4.useTheme(themeDefault())
+
+    // The change records are for a renderer that takes them: one that doesn't must not be left
+    // an ever longer list.
+    var t5 = viewTree(themeDefault(), Mono())
+    var e5 = viewInput()
+    val unusedText = t5.mount(text("0", style()).named("n"))
+    for (i in 0 until 6000) {
+        t5.setText(t5.named("n"), "$i")
+        frame(t5, e5, r)
+    }
+    check(t5.changes.size <= 3 * VIEW_CHANGES_KEPT, "change records nobody takes don't pile up (${t5.changes.size / 3} records after 6000 frames)")
+    return
+}
+
 fun main: int {
     counting()
     settings()
     scrollingAndBreakpoints()
     fontsArrive()
+    adversarial()
     println("tree: $passed passed, $failed failed")
     if (failed == 0) 0 else 1
 }

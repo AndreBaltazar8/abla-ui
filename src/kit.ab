@@ -13,6 +13,7 @@
 import "abla/float"
 import "./flex.ab"
 import "./style.ab"
+import "./state.ab"
 import "./tree.ab"
 
 var kitTheme: Theme = themeDefault()
@@ -22,6 +23,13 @@ fun ViewTree.useTheme(t: Theme): void {
     kitTheme = t
     this.theme = t
     for (i in 0 until this.lookValid.size) this.lookValid[i] = false
+    // What is mounted was built from the old theme's styles: its components render again at the
+    // next update, and its text takes the new default font.
+    for (n in 0 until this.kind.size) {
+        if (!this.flex.has(n, FLEX_F_LIVE)) continue
+        if (this.comp[n] != null) stateQueue(n)
+        if (this.kind[n] == EL_TEXT) this.applyFont(n)
+    }
     return
 }
 

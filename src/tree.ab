@@ -194,7 +194,9 @@ class ViewTree(
     var hot: int = -1, var active: int = -1, var focused: int = -1, var overUi: bool = false, var navigating: bool = false,
     var hotSince: f64 = 0.0, var tipCandidate: int = -1, var tipNode: int = -1, var tipX: f64 = 0.0, var tipY: f64 = 0.0, var now: f64 = 0.0,
     var dragScroll: int = -1, var dragGrab: f64 = 0.0, var pressX: f64 = 0.0, var pressY: f64 = 0.0,
-    var layouts: int = 0, var renders: int = 0, var resolves: int = 0
+    var layouts: int = 0, var renders: int = 0, var resolves: int = 0,
+    val nameOf: array<string> = [],    // the name each node was given (`El.named`), "" for none
+    var changesTaken: bool = false     // a renderer takes the change records (takeChanges)
 )
 
 fun viewTree(theme: Theme, font: TextFont): ViewTree {
@@ -248,6 +250,7 @@ fun ViewTree.newNode(parent: int): int {
         this.drawnH.append(-1.0)
         this.textSeen.append(-1)
         this.renderedIn.append(-1)
+        this.nameOf.append("")
         this.texts.text.append("")
         this.texts.face.append(0)
         this.texts.lineH.append(0.0)
@@ -277,13 +280,19 @@ fun ViewTree.newNode(parent: int): int {
     this.stamp[n] = this.stamp[n] + 1
     this.drawnW[n] = -1.0
     this.renderedIn[n] = -1
+    this.nameOf[n] = ""
     this.texts.text[n] = ""
     this.texts.maxLines[n] = 0
     this.texts.noWrap[n] = false
     n
 }
 
+/** How many change records are kept while no renderer has ever taken them. */
+val VIEW_CHANGES_KEPT = 4096
+
 fun ViewTree.record(op: int, n: int, extra: int): void {
+    // Nobody takes them (a painter that draws from the tree needs none): don't keep them all for ever.
+    if (!this.changesTaken && this.changes.size >= VIEW_CHANGES_KEPT * 3) this.changes.clear()
     this.changes.append(op)
     this.changes.append(n)
     this.changes.append(extra)
@@ -305,7 +314,25 @@ fun ViewTree.unmount(n: int): void {
     return
 }
 
-/** A subtree going away: its components stop being rendered, refs and input let go. */
+/** Drop every `n` from `list`. */
+fun viewDrop(var list: array<int>, n: int): void {
+    var kept = 0
+    for (i in 0 until list.size) {
+        if (list[i] != n) {
+            list[kept] = list[i]
+            kept = kept + 1
+        }
+    }
+    list.truncate(kept)
+    return
+}
+
+/**
+ * A subtree going away: its components stop being rendered, and everything that points at
+ * its nodes lets go, since their slots are taken by other nodes later: its name, its handlers,
+ * hover, press, focus, a drag of it, its tooltip, and the regions the last paint collected
+ * for input.
+ */
 fun ViewTree.forget(n: int): void {
     var c = this.flex.first[n]
     while (c >= 0) {
@@ -314,10 +341,37 @@ fun ViewTree.forget(n: int): void {
     }
     this.comp[n] = null
     this.renderedIn[n] = -1
+    if (this.nameOf[n] != "") {
+        if ((this.names.get(this.nameOf[n]) ?? -1) == n) this.names.remove(this.nameOf[n])
+        this.nameOf[n] = ""
+    }
+    this.role[n] = ROLE_NONE
+    this.press[n] = elNothing
+    this.change[n] = elNoValue
+    this.tooltip[n] = ""
+    this.own[n] = 0
     if (this.hot == n) this.hot = -1
     if (this.active == n) this.active = -1
     if (this.focused == n) this.focused = -1
     if (this.tipNode == n) this.tipNode = -1
+    if (this.tipCandidate == n) this.tipCandidate = -1
+    if (this.dragScroll == n) {
+        this.dragScroll = -1
+        this.dragGrab = -1.0
+    } else if (this.dragScroll < 0 && this.dragGrab == f64FromInt(n)) this.dragGrab = -1.0
+    var kept = 0
+    for (i in 0 until this.hitNode.size) {
+        if (this.hitNode[i] != n) {
+            this.hitNode[kept] = this.hitNode[i]
+            for (k in 0 until 4) this.hitRect[kept * 4 + k] = this.hitRect[i * 4 + k]
+            kept = kept + 1
+        }
+    }
+    this.hitNode.truncate(kept)
+    this.hitRect.truncate(kept * 4)
+    viewDrop(this.focusOrder, n)
+    viewDrop(this.windows, n)
+    viewDrop(this.scrollers, n)
     this.record(CH_REMOVE, n, 0)
     return
 }
@@ -418,7 +472,10 @@ fun ViewTree.setProps(n: int, el: El): void {
     this.key[n] = el.key
     this.press[n] = el.onPress
     this.change[n] = el.onValue
-    if (el.name != "") this.names.set(el.name, n)
+    if (el.name != "" && this.nameOf[n] != el.name) {
+        this.names.set(el.name, n)
+        this.nameOf[n] = el.name
+    }
     if (changed) {
         this.record(CH_PROPS, n, 0)
         this.stamp[n] = this.stamp[n] + 1
@@ -657,8 +714,11 @@ fun ViewTree.rebreak(n: int, before: f64): void {
     return
 }
 
-/** Hand the recorded changes (op, node, extra triples) to `into` and forget them. */
+/** Hand the recorded changes (op, node, extra triples) to `into` and forget them. A renderer
+ *  that keeps objects per node takes them every frame; until a first take only the newest
+ *  VIEW_CHANGES_KEPT records are kept (a tree nobody takes them from must not grow for ever). */
 fun ViewTree.takeChanges(var into: array<int>): void {
+    this.changesTaken = true
     into.clear()
     for (v in this.changes) into.append(v)
     this.changes.clear()
