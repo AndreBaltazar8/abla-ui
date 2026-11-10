@@ -133,7 +133,9 @@ name tag over a character) goes through `tree.named(...)` and `setText` / `setTr
 without any render.
 
 A read works through any reference (a `val`, an immutable parameter, a field of an immutable
-object): who read a State is kept in a table by its id, not in the State. State holds plain values (numbers, booleans, strings). Keep a collection beside a State
+object): who read a State is kept in a table by its id, not in the State, and only while a
+render scope has read it (a State nobody reads under a scope keeps nothing global). State is
+confined to one thread: a `thread { }` that touches one doesn't compile. State holds plain values (numbers, booleans, strings). Keep a collection beside a State
 that counts its changes, and bump it after each edit.
 
 ## Order is deterministic

@@ -14,6 +14,16 @@
 //   settings.^volume.version            // how many times volume changed
 //   settings.^volume.peek()             // read without subscribing
 //
+// Memory: a State is its value, its version and an id (a number from a counter). Only while
+// a render scope has read it does it hold an entry in the readers' table, and that goes with
+// its last reader (a change drops ended readers; a sweep, amortized over ended scopes, drops
+// those of States that are gone). A program that never opens a scope (abla-one) keeps
+// nothing global per State.
+//
+// Threads: State is confined to one thread. Its bookkeeping is process globals, so a
+// `thread { }` that makes or reads one doesn't compile (thread.shared-global: the language
+// lets a thread reach only globals nobody can change); tests/errors/state_thread.ab holds it.
+//
 // Writes that keep the value (`==`) change nothing. State holds plain values (numbers,
 // booleans, strings); keep a collection beside a State that counts its changes
 // (`var itemsChanged by State(0)`, bumped after each edit) and read that State where the
@@ -80,7 +90,7 @@ fun stateTakeChanged(var into: array<int>): void {
     into.clear()
     for (s in stateChangedScopes) {
         into.append(s)
-        stateQueued.set(s, false)
+        stateQueued.remove(s)
     }
     stateChangedScopes.clear()
     return
@@ -99,7 +109,9 @@ fun stateTouchAll(): void {
 // works through any reference (a val, an immutable parameter, a field of an immutable object).
 // Per State id, a list of reader scopes in the order they first read it: links in flat arrays
 // (scope, the State's id, next, previous), a free list for the links dropped.
-val stateHead: array<int> = []      // per State id: its first link, -1 for none
+// Only a State with readers has an entry (its first link): one nobody reads under a render
+// scope (all of abla-one's) costs nothing here, and the entry goes with its last reader.
+val stateHead: Map<int, int> = Map()
 val stateLinkScope: array<int> = [] // -1: a free link
 val stateLinkId: array<int> = []
 val stateLinkNext: array<int> = []
@@ -110,15 +122,30 @@ var stateLinksLive = 0
 // so its links to ended scopes are only freed by a sweep.
 var stateEndedSinceSweep = 0
 
-/** A new State's id (its slot in the readers' table). */
+// The last id given: an id is a number, not a slot, so making a State allocates nothing.
+var stateIdCount = 0
+
+/** A new State's id (a key into the readers' table, once something reads it). */
 fun stateNewId(): int {
-    stateHead.append(-1)
-    stateHead.size - 1
+    stateIdCount = stateIdCount + 1
+    stateIdCount
 }
+
+// Pairs (State id, scope) known to be subscribed, one per id & 63: a render reads the same
+// States again and again, and this answers those reads without the table. Fixed size; a
+// pair leaves it when its link goes.
+val stateSeenId: array<int> = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+val stateSeenScope: array<int> = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 
 /** Note that `scope` read State `id` (once: a second read changes nothing). */
 fun stateSubscribe(id: int, scope: int): void {
-    var at = stateHead[id]
+    val slot = id & 63
+    if (stateSeenId[slot] == id && stateSeenScope[slot] == scope) return
+    stateSeenId[slot] = id
+    stateSeenScope[slot] = scope
+    var at = stateHead.get(id) ?? -1
     var last = -1
     while (at >= 0) {
         if (stateLinkScope[at] == scope) return
@@ -139,14 +166,14 @@ fun stateSubscribe(id: int, scope: int): void {
         stateLinkNext.append(-1)
         stateLinkPrev.append(last)
     }
-    if (last >= 0) stateLinkNext[last] = link else stateHead[id] = link
+    if (last >= 0) stateLinkNext[last] = link else stateHead.set(id, link)
     stateLinksLive = stateLinksLive + 1
     return
 }
 
 /** Drop `scope` from State `id`'s readers. */
 fun stateUnsubscribe(id: int, scope: int): void {
-    var at = stateHead[id]
+    var at = stateHead.get(id) ?? -1
     while (at >= 0) {
         if (stateLinkScope[at] == scope) {
             stateUnlink(at)
@@ -159,9 +186,13 @@ fun stateUnsubscribe(id: int, scope: int): void {
 
 /** Take link `at` out of its State's list and onto the free list. */
 fun stateUnlink(at: int): void {
+    val slot = stateLinkId[at] & 63
+    if (stateSeenId[slot] == stateLinkId[at] && stateSeenScope[slot] == stateLinkScope[at]) stateSeenId[slot] = 0
     val prev = stateLinkPrev[at]
     val next = stateLinkNext[at]
-    if (prev >= 0) stateLinkNext[prev] = next else stateHead[stateLinkId[at]] = next
+    if (prev >= 0) stateLinkNext[prev] = next
+    else if (next >= 0) stateHead.set(stateLinkId[at], next)
+    else stateHead.remove(stateLinkId[at])
     if (next >= 0) stateLinkPrev[next] = prev
     stateLinkScope[at] = -1
     stateLinkId[at] = -1
@@ -173,7 +204,7 @@ fun stateUnlink(at: int): void {
 
 /** State `id` changed: queue its live readers, in order, and drop the ended ones. */
 fun stateNotify(id: int): void {
-    var at = stateHead[id]
+    var at = stateHead.get(id) ?? -1
     while (at >= 0) {
         val next = stateLinkNext[at]
         val r = stateLinkScope[at]
@@ -186,7 +217,7 @@ fun stateNotify(id: int): void {
 /** How many readers State `id` holds: an ended scope counts until a change or a sweep drops it. */
 fun stateReaderCount(id: int): int {
     var count = 0
-    var at = stateHead[id]
+    var at = stateHead.get(id) ?? -1
     while (at >= 0) {
         count = count + 1
         at = stateLinkNext[at]
@@ -194,12 +225,14 @@ fun stateReaderCount(id: int): int {
     count
 }
 
-/** Free every link to an ended scope (States that are gone keep theirs until this runs). */
+/** Free every link to an ended scope (States that are gone keep theirs until this runs);
+ *  then no link names an ended scope, so they are forgotten too. */
 fun stateSweep(): void {
     for (at in 0 until stateLinkScope.size) {
         val r = stateLinkScope[at]
         if (r >= 0 && !stateScopeLive(r)) stateUnlink(at)
     }
+    stateEnded.clear()
     stateEndedSinceSweep = 0
     return
 }
@@ -211,7 +244,10 @@ fun stateSweep(): void {
  */
 class State<StateValue>(var current: StateValue, val id: int = stateNewId(), var version: int = 0) {
     fun getValue(): StateValue {
-        if (stateReader >= 0) stateSubscribe(id, stateReader)
+        if (stateReader >= 0) {
+            val slot = id & 63
+            if (stateSeenId[slot] != id || stateSeenScope[slot] != stateReader) stateSubscribe(id, stateReader)
+        }
         current
     }
 
@@ -248,3 +284,9 @@ class State<StateValue>(var current: StateValue, val id: int = stateNewId(), var
     /** How many readers it holds (an ended scope until a change or a sweep drops it). */
     fun readerCount(): int = stateReaderCount(id)
 }
+
+/** The sizes of State's global tables, for leak checks. */
+class StateTables(val heads: int, val links: int, val linkSlots: int, val ended: int, val queued: int, val changed: int)
+
+fun stateTables(): StateTables =
+    StateTables(stateHead.size, stateLinksLive, stateLinkScope.size, stateEnded.size, stateQueued.size, stateChangedScopes.size)

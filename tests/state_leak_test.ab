@@ -1,0 +1,95 @@
+// State keeps nothing global for a value nobody reads under a render scope, and what it keeps
+// for readers goes when they do: leak checks over many States and components. Exits 0 when
+// every check passes.
+
+import "abla/io"
+import "abla/float"
+import "abla/float/text"
+import "../src/ui.ab"
+
+var failed = 0
+var passed = 0
+
+fun check(ok: bool, name: string): void {
+    if (ok) passed = passed + 1
+    else {
+        println("FAIL $name")
+        failed = failed + 1
+    }
+    return
+}
+
+fun same(a: StateTables, b: StateTables): bool =
+    a.heads == b.heads && a.links == b.links && a.linkSlots == b.linkSlots && a.ended == b.ended && a.queued == b.queued && a.changed == b.changed
+
+fun show(a: StateTables): string = "heads ${a.heads}, links ${a.links} of ${a.linkSlots}, ended ${a.ended}, queued ${a.queued}, changed ${a.changed}"
+
+class Session(var actor: string by State("ana"), var shift: int by State(1), var open: bool by State(false))
+
+class Shared(var tick: int by State(0))
+val shared = Shared()
+
+/** A component that comes and goes (a name tag, a tooltip): reads a shared State and its own. */
+class Tag(var hits: int by State(0)) : Component {
+    fun render(): El = text("tag ${shared.tick} ${hits}", style())
+}
+fun makeTag(): Component = Tag()
+
+class Mono() : TextFont {
+    fun face(family: string, size: f64, weight: int): int = 0
+    fun width(face: int, text: string, start: int, end: int): f64 = f64FromInt(end - start) * 8.0
+    fun clusterEnd(text: string, i: int): int = textCodePointEnd(text, i)
+    fun lineHeight(face: int): f64 = 20.0
+}
+
+fun main: int {
+    val n = 100000
+
+    // States made and dropped with no scope open: nothing global grows.
+    val start = stateTables()
+    for (i in 0 until n) {
+        var s = Session()
+        s.shift = i
+        val unused = s.actor
+    }
+    val after = stateTables()
+    check(same(start, after), "$n States made, read, written and dropped with no scope leave the tables as they were (${show(start)} → ${show(after)})")
+
+    // A component mounted and unmounted many times: the tables stay small all along and return to the start.
+    var t = viewTree(themeDefault(), Mono())
+    t.update(800.0, 600.0)
+    val before = stateTables()
+    var most = 0
+    for (i in 0 until 20000) {
+        val node = t.mount(comp("tag", makeTag))
+        t.update(800.0, 600.0)
+        t.unmount(node)
+        if (i % 7 == 0) shared.tick = i
+        t.update(800.0, 600.0)
+        val now = stateTables()
+        val size = now.heads + now.linkSlots + now.ended + now.queued + now.changed
+        if (size > most) most = size
+    }
+    check(most < 600, "while 20000 components come and go the tables stay small (at most $most entries)")
+    stateSweep()
+    val end = stateTables()
+    check(end.heads == before.heads && end.links == before.links && end.ended == before.ended && end.queued == before.queued && end.changed == before.changed,
+        "after them the tables are back where they started (${show(before)} → ${show(end)})")
+
+    // A State read by a scope that then ends: its entry goes, by a change or by a sweep.
+    val one = stateTables()
+    val read = Session()
+    val scope = stateNewScope()
+    val previous = stateRead(scope)
+    val unusedActor = read.actor
+    val unusedShift = read.shift
+    stateReadEnd(previous)
+    check(stateTables().heads == one.heads + 2 && stateTables().links == one.links + 2, "a scope's reads hold one entry per State it read")
+    stateEndScope(scope)
+    read.actor = "rui"
+    check(stateTables().heads == one.heads + 1, "a change drops the ended reader and the State's entry")
+    stateSweep()
+    check(stateTables().heads == one.heads && stateTables().links == one.links && stateTables().ended == one.ended, "a sweep drops the rest (${show(one)} → ${show(stateTables())})")
+    println("state leaks: $passed passed, $failed failed")
+    if (failed == 0) 0 else 1
+}
