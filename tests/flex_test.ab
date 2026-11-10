@@ -783,7 +783,24 @@ fun caching(): void {
     return
 }
 
+/** Before anything makes a wrapping row, one asked for by hand is a plain row (its code isn't linked). */
+fun unregistered(): void {
+    var m = textMeasure()
+    var t = flexTree()
+    val row = t.add(-1)
+    t.setDir(row, FLEX_ROW)
+    t.setWrap(row, true)
+    val kids: array<int> = []
+    for (i in 0 until 3) kids.append(fixed(t, row, 70.0, 30.0))
+    t.layout(row, 100.0, 600.0, m)
+    check(near(t.x[kids[2]], 140.0), "an unregistered wrap row lays out as a plain row, all on one line (${show(t, kids[2])})")
+    return
+}
+
 fun main: int {
+    unregistered()
+    flexUseWrapRows()
+    flexUseScrollRows()
     oneColumn()
     oneGrowing()
     oneWholePixels()

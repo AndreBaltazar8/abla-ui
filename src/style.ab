@@ -217,7 +217,10 @@ fun Style.same(other: Style): bool {
 fun Style.row(): Style = this.set(P_DIR, 1.0)
 fun Style.column(): Style = this.set(P_DIR, 0.0)
 fun Style.stack(): Style = this.set(P_DIR, 2.0)
-fun Style.wrap(): Style = this.set(P_WRAP, 1.0)
+fun Style.wrap(): Style {
+    flexUseWrapRows()
+    this.set(P_WRAP, 1.0)
+}
 fun Style.gap(v: f64): Style = this.set(P_GAP, v).set(P_CROSS_GAP, v)
 fun Style.gaps(main: f64, cross: f64): Style = this.set(P_GAP, main).set(P_CROSS_GAP, cross)
 fun Style.padding(v: f64): Style = this.set(P_PAD_L, v).set(P_PAD_T, v).set(P_PAD_R, v).set(P_PAD_B, v)
@@ -242,7 +245,10 @@ fun Style.shrink(v: f64): Style = this.set(P_SHRINK, v)
 fun Style.align(v: int): Style = this.set(P_ALIGN, f64FromInt(v))
 fun Style.justify(v: int): Style = this.set(P_JUSTIFY, f64FromInt(v))
 fun Style.alignSelf(v: int): Style = this.set(P_ALIGN_SELF, f64FromInt(v))
-fun Style.scroll(axes: int): Style = this.set(P_SCROLL, f64FromInt(axes))
+fun Style.scroll(axes: int): Style {
+    if ((axes & SCROLL_X) != 0) flexUseScrollRows()
+    this.set(P_SCROLL, f64FromInt(axes))
+}
 /** Out of the flow, placed by `anchor` (FLEX_ANCHOR_*) in the parent, inset by (dx, dy). */
 fun Style.anchor(anchor: int, dx: f64, dy: f64): Style = this.set(P_ANCHOR, f64FromInt(anchor)).set(P_OFF_X, dx).set(P_OFF_Y, dy)
 fun Style.hidden(on: bool): Style = this.set(P_HIDDEN, if (on) 1.0 else 0.0)

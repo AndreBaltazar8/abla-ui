@@ -118,6 +118,40 @@ interface FlexMeasure {
     fun measure(node: int, maxWidth: f64, maxHeight: f64): FlexSize
 }
 
+// Wrapping rows, scrolling rows and CSS mode are reached only through these, filled by what
+// makes one (flexUseWrapRows, flexUseScrollRows, flexUseCss: Style.wrap, a scroll across,
+// setCss, abla-one's oneUseWrapRows): a program that never makes one links none of their code.
+// A row asking for one before that is laid out as a plain row; a CSS container by these rules.
+val flexWrapRowCode: array<(var: FlexTree, int, f64, f64, f64, f64, var: FlexMeasure) -> void> = []
+val flexScrollRowCode: array<(var: FlexTree, int, f64, f64, f64, f64, var: FlexMeasure) -> void> = []
+val flexCssCode: array<(var: FlexTree, int, f64, f64, f64, f64, var: FlexMeasure) -> void> = []
+
+fun flexWrapRowCall(var t: FlexTree, n: int, availW: f64, availH: f64, w: f64, h: f64, var measurer: FlexMeasure): void {
+    t.wrapRow(n, availW, availH, w, h, measurer)
+    return
+}
+fun flexScrollRowCall(var t: FlexTree, n: int, availW: f64, availH: f64, w: f64, h: f64, var measurer: FlexMeasure): void {
+    t.scrollRow(n, availW, availH, w, h, measurer)
+    return
+}
+fun flexCssCall(var t: FlexTree, n: int, availW: f64, availH: f64, w: f64, h: f64, var measurer: FlexMeasure): void {
+    t.computeCss(n, availW, availH, w, h, measurer)
+    return
+}
+
+fun flexUseWrapRows(): void {
+    if (flexWrapRowCode.size == 0) flexWrapRowCode.append(flexWrapRowCall)
+    return
+}
+fun flexUseScrollRows(): void {
+    if (flexScrollRowCode.size == 0) flexScrollRowCode.append(flexScrollRowCall)
+    return
+}
+fun flexUseCss(): void {
+    if (flexCssCode.size == 0) flexCssCode.append(flexCssCall)
+    return
+}
+
 /** A measurer for trees without measured leaves: everything is 0 × 0. */
 class FlexNoMeasure(val size: FlexSize) : FlexMeasure {
     fun measure(node: int, maxWidth: f64, maxHeight: f64): FlexSize = FlexSize(0.0, 0.0)
@@ -506,7 +540,11 @@ fun FlexTree.setIntrinsic(n: int, w: f64, h: f64): void {
 
 /** Lay `n`'s children out by CSS flexbox's rules (fractional sizes, proportional shrink,
  *  stretch across by default, growers in any bounded room): a mode for one container. */
-fun FlexTree.setCss(n: int, on: bool): void = this.setFlag(n, FLEX_F_CSS, on)
+fun FlexTree.setCss(n: int, on: bool): void {
+    if (on) flexUseCss()
+    this.setFlag(n, FLEX_F_CSS, on)
+    return
+}
 
 /** A measured leaf whose content depends on the exact room (text cut with an ellipsis). */
 fun FlexTree.setMeasureExact(n: int, on: bool): void {
@@ -630,7 +668,7 @@ fun FlexTree.compute(n: int, availW: f64, availH: f64, fixedW: f64, fixedH: f64,
     }
     this.computed = this.computed + 1
     this.freshAt[n] = this.passes
-    if (this.has(n, FLEX_F_CSS)) this.computeCss(n, availW, availH, fixedW, fixedH, measurer)
+    if (this.has(n, FLEX_F_CSS) && flexCssCode.size > 0) flexCssCode[0](this, n, availW, availH, fixedW, fixedH, measurer)
     else if (this.parent[n] >= 0 && this.has(this.parent[n], FLEX_F_CSS)) {
         // A CSS container's sizes hold a child's min / max, as CSS's do (abla-one's don't, for a container).
         this.computeOne(n, availW, availH, if (fixedW >= 0.0) flexClamp(fixedW, this.minW[n], this.maxW[n]) else fixedW,
@@ -686,8 +724,8 @@ fun FlexTree.computeOne(n: int, availW: f64, availH: f64, fixedW: f64, fixedH: f
         if (w < 0.0) w = if (this.iW[n] == FLEX_INTRINSIC_ROOM) availW else fmax(this.iW[n], 0.0)
         if (h < 0.0) h = if (this.iH[n] == FLEX_INTRINSIC_ROOM) availH else fmax(this.iH[n], 0.0)
     } else if (this.dir[n] == FLEX_ROW) {
-        if (this.has(n, FLEX_F_SCROLL_X)) this.scrollRow(n, availW, availH, w, h, measurer)
-        else if (this.has(n, FLEX_F_WRAP)) this.wrapRow(n, availW, availH, w, h, measurer)
+        if (this.has(n, FLEX_F_SCROLL_X) && flexScrollRowCode.size > 0) flexScrollRowCode[0](this, n, availW, availH, w, h, measurer)
+        else if (this.has(n, FLEX_F_WRAP) && flexWrapRowCode.size > 0) flexWrapRowCode[0](this, n, availW, availH, w, h, measurer)
         else this.row(n, availW, availH, w, h, measurer)
         return
     } else if (this.dir[n] == FLEX_STACK) {
