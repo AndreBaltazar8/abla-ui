@@ -19,8 +19,9 @@ import "./markup.ab"
 // target (`forge:gap=8`, kept only where `uiTarget` is that target). Values: "text",
 // numbers, bare words, or {Abla expressions}. `on*={...}` handlers hold statements separated
 // by `;`; onChange receives `value` (a bool from a Toggle, a number from a Slider, an index
-// from Tabs). Capitalised tags that aren't built in call the function of that name with the
-// attribute values in order and the children (if any). <If cond={...}>…</If> <Else>…</Else>
+// from Tabs). Capitalised tags that aren't built in call the function (or class) of that name
+// with each attribute as the argument of that name, in any order, and the children (if any)
+// as `children`. Needs ablac 0.2.53 or newer (named arguments from a subparser). <If cond={...}>…</If> <Else>…</Else>
 // and <For each={xs} as="x">…</For> control what is rendered.
 //
 // Where it differs from `$one`, and why: handlers are closures on the elements (no `ui: Ui`
@@ -378,15 +379,20 @@ compile fun uiDslElement(cursor: ParserCursor): SyntaxExpression {
         }
         else -> {
             // A program's own component: a function giving an element, or a class implementing
-            // Component (mounted under its key). Name(attributes in order, children); `key`
-            // goes to the mount, not to the call.
+            // Component (mounted under its key). Each attribute is the argument of that name, in
+            // any order (the compiler reports an unknown, repeated or missing one, and fills
+            // defaults); the children go to a parameter named `children`; `key` goes to the
+            // mount, not to the call. A prefixed attribute (hover:, max760:, web:) is style,
+            // which a custom tag doesn't take: pass a Style through a parameter instead.
             val arguments: array<SyntaxExpression> = []
             var i = 0
             while (i < a.names.size) {
-                if (a.names[i] != "key") arguments.append(a.values[i])
+                val name = a.names[i]
+                if (name.indexOf(":") >= 0) parserFail(cursor, "<$tag> takes its attributes as arguments: $name is style; pass a Style through a parameter")
+                else if (name != "key") arguments.append(syntaxNamedArgument(name, a.values[i]))
                 i = i + 1
             }
-            if (children.size > 0) arguments.append(kids)
+            if (children.size > 0) arguments.append(syntaxNamedArgument("children", kids))
             syntaxCall("uiTag", [syntaxString(tag), uiDslText(a, "key", ""), syntaxCall(tag, arguments)])
         }
     }

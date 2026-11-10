@@ -1,0 +1,6 @@
+// expect: the attribute label is given twice
+import "../../src/ui.ab"
+import "../../src/dsl.ab"
+fun Pill(label: string): El = $ui <Text>{label}</Text>
+fun bad(): El = $ui <Pill label="a" label="b"/>
+fun main: int = 0

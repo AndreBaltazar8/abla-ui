@@ -1,0 +1,6 @@
+// expect: hover:gap is style
+import "../../src/ui.ab"
+import "../../src/dsl.ab"
+fun Pill(label: string): El = $ui <Text>{label}</Text>
+fun bad(): El = $ui <Pill label="a" hover:gap=4/>
+fun main: int = 0

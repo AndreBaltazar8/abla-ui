@@ -63,7 +63,8 @@ tree.paint(painter)      // ViewPainter: boxes, text runs, images, clips
 `$ui` is abla-one's `$one` syntax (its parser, ported): one element per template, attributes
 as style properties unless the element takes them as data, `state:` and `max760:` prefixes,
 `{expressions}`, `on*={ statements }` handlers (`onChange` receives `value`), `<If>` /
-`<Else>` / `<For>`, and capitalised tags calling a function of that name.
+`<Else>` / `<For>`, and capitalised tags calling a function of that name. The tag syntax
+(`dsl`) needs ablac 0.2.53 or newer; the rest of abla-ui builds with 0.2.48 and newer.
 
 ```abla
 import github("AndreBaltazar8/abla-ui")
@@ -82,9 +83,21 @@ class SettingsWindow() : Component {
 
 A capitalised tag that isn't built in is a program's own: a function giving an element, or a
 class implementing `Component`, which is mounted under the tag's `key` (its name unless
-given) and keeps its first instance, and so its State, while its parent renders again:
+given) and keeps its first instance, and so its State, while its parent renders again. Each
+attribute goes to the parameter of that name, in any order, and a parameter with a default
+may be left out; the compiler reports an attribute that names no parameter, one given twice,
+or a required one missing, at the tag. A tag's children go to the parameter named
+`children` (`array<El>`), so a function that takes children must call that parameter
+`children`. A prefixed attribute (`hover:gap`) is style, which a custom tag doesn't take:
+pass a `Style` through a parameter instead.
 
 ```abla
+fun Card(title: string, children: array<El>, width: f64 = 200.0): El = $ui
+    <Column width={width} gap=6>
+      <Text>{title}</Text>
+      {fragment(children)}
+    </Column>
+
 class Counter(val label: string, var clicks: int by State(0)) : Component {
     fun render(): El = $ui
         <Button onPress={ clicks += 1 }>{label} {clicks}</Button>
@@ -92,8 +105,10 @@ class Counter(val label: string, var clicks: int by State(0)) : Component {
 
 fun Toolbar(): El = $ui
     <Row gap=8>
-      <Counter label="apples"/>
-      <Counter label="pears" key="pears"/>
+      <Card width={320.0} title="Fruit">
+        <Counter label="apples"/>
+        <Counter key="pears" label="pears"/>
+      </Card>
     </Row>
 ```
 
@@ -131,8 +146,10 @@ change records match call for call.
 
 ## Checks
 
-`scripts/test.sh` builds and runs every `tests/*_test.ab` natively (`ABLAC` picks the
-compiler). It builds with ablac 0.2.48 and newer.
+`scripts/test.sh` builds and runs every `tests/*_test.ab` natively, and checks that every
+`tests/errors/*.ab` fails to build with the message its `// expect:` line names (`ABLAC` picks
+the compiler). abla-ui builds with ablac 0.2.48 and newer; the tag syntax (`src/dsl.ab`) needs
+0.2.53 or newer, and with an older compiler its checks are skipped.
 
 ## One grammar
 

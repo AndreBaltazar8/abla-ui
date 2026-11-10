@@ -1,0 +1,6 @@
+// expect: E_NAMED_ARGUMENT_UNKNOWN
+import "../../src/ui.ab"
+import "../../src/dsl.ab"
+fun Frame(items: array<El>): El = column(style(), items)
+fun bad(): El = $ui <Frame><Text>a</Text></Frame>
+fun main: int = 0

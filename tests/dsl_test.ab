@@ -27,6 +27,17 @@ class Person(val name: string, val seed: string)
 fun Greeting(name: string, emphasis: bool): El = $ui
     <Text fontSize=18 weight={if (emphasis) "bold" else "regular"}>Olá, {name}!</Text>
 
+/** A card with a default and children: attributes match these by name. */
+fun Card(title: string, children: array<El>, tone: int = 0, width: f64 = 200.0): El = $ui
+    <Column width={width} name={"card-$title"} gap={tone}>
+      <Text>{title}</Text>
+      {fragment(children)}
+    </Column>
+
+class Badge(val label: string, val count: int = 1, var seen: int by State(0)) : Component {
+    fun render(): El = $ui <Text name={"badge-$label"}>{label} {count}</Text>
+}
+
 class Demo(
     var count: int by State(0),
     var open: bool by State(false),
@@ -64,8 +75,18 @@ fun screen(): El = $ui
           <Text>{person.name}</Text>
         </Row>
       </For>
-      <Greeting name="Sofia" emphasis={demo.count > 0} />
+      <Greeting emphasis={demo.count > 0} name="Sofia" />
       {spacer()}
+    </Column>
+
+fun cards(): El = $ui
+    <Column>
+      <Card width={320.0} title="Out of order">
+        <Text>one</Text>
+        <Text>two</Text>
+      </Card>
+      <Badge count={3} label="mail"/>
+      <Badge label="news" key="n"/>
     </Column>
 
 fun window(): El = $ui
@@ -145,6 +166,15 @@ fun main: int {
     check(root.children[7].children[0].text == "André Silva", "the loop variable")
     check(root.children[8].text == "Olá, Sofia!", "a program's own component")
     check(root.children.size == 10, "fragments flattened (${root.children.size})")
+
+    // Custom tags: attributes by name, in any order; defaults; children by name.
+    val cs = cards()
+    val card = cs.children[0]
+    check(card.name == "card-Out of order" && card.style.get(P_WIDTH, 0, 800.0, 0.0) == 320.0, "a custom tag's attributes reach their parameters by name, in any order")
+    check(near(card.style.get(P_GAP, 0, 800.0, -1.0), 0.0), "a parameter left out takes its default")
+    check(card.children.size == 3 && card.children[2].text == "two", "children go to the parameter named children")
+    check(cs.children[1].kind == EL_COMPONENT && cs.children[2].key == "n", "a class component takes named arguments too, key to the mount")
+    check(root.children[8].text == "Olá, Sofia!", "a call site written in another order means the same")
 
     // Handlers run.
     press.onPress()
