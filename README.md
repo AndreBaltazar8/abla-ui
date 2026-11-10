@@ -144,6 +144,14 @@ tree's one Map (names, for `named`) and the theme's (named styles and scopes) ar
 looked up. `tests/style_test.ab` builds the same tree twice and checks the paint calls and
 change records match call for call.
 
+## Data from a wire takes defaults
+
+abla-ui decodes nothing from a wire today. Anything it ever decodes (a State restored from
+storage, a tree or patch sent between a server and a host) must read a field that is absent
+as its default when it has one, and ignore fields it doesn't know: a newer side then still
+talks to an older one when a message gains a field. Only a field with no default may make a
+message invalid.
+
 ## Checks
 
 `scripts/test.sh` builds and runs every `tests/*_test.ab` natively, and checks that every
