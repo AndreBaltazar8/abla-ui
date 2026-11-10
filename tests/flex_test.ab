@@ -1,5 +1,9 @@
 // Self-checks for flex layout and line breaking. Exits 0 when every check passes.
 //
+// The default rules are abla-one's (its src/layout/layout.ab): each expectation in the first
+// part is worked out by hand from that code. The second part keeps CSS flexbox's results, for
+// containers that ask for that mode (setCss).
+//
 //   ablac build tests/flex_test.ab -o build/flex-test && build/flex-test
 
 import "abla/io"
@@ -62,30 +66,79 @@ fun fixed(var t: FlexTree, parent: int, w: f64, h: f64): int {
     n
 }
 
-fun columnAndRow(): void {
+/** A root that leaves its first child its own size: a column aligned to the start. */
+fun stage(var t: FlexTree): int {
+    val root = t.add(-1)
+    t.setAlign(root, FLEX_START, FLEX_AUTO)
+    root
+}
+
+fun oneColumn(): void {
     var m = textMeasure()
     var t = flexTree()
-    val root = t.add(-1)
-    t.setPadding(root, 10.0, 20.0, 10.0, 20.0)
-    t.setGap(root, 5.0)
-    t.setAlign(root, FLEX_START, FLEX_START)
-    val a = fixed(t, root, 100.0, 30.0)
-    val b = fixed(t, root, 50.0, 40.0)
-    t.layout(root, 800.0, 600.0, m)
-    expectBox(t, root, 0.0, 0.0, 120.0, 115.0, "a column hugs its content plus padding")
+    val st = stage(t)
+    val col = t.add(st)
+    t.setPadding(col, 10.0, 20.0, 10.0, 20.0)
+    t.setGap(col, 5.0)
+    t.setAlign(col, FLEX_START, FLEX_START)
+    val a = fixed(t, col, 100.0, 30.0)
+    val b = fixed(t, col, 50.0, 40.0)
+    t.layout(st, 800.0, 600.0, m)
+    expectBox(t, st, 0.0, 0.0, 800.0, 600.0, "the root takes the whole box")
+    expectBox(t, col, 0.0, 0.0, 120.0, 115.0, "a column hugs its content plus padding")
     expectBox(t, a, 10.0, 20.0, 100.0, 30.0, "first child at the padding")
     expectBox(t, b, 10.0, 55.0, 50.0, 40.0, "second child after the gap")
-
-    // Stretch (the default): a content-width child takes the column's width.
-    t.setAlign(root, FLEX_STRETCH, FLEX_START)
-    val c = t.add(root)
+    // The default align stretches: a hugging column measures, then stretches its content-width children to its width.
+    t.setAlign(col, FLEX_AUTO, FLEX_START)
+    val c = t.add(col)
     t.setHeight(c, FLEX_FIXED, 10.0)
-    t.layout(root, 800.0, 600.0, m)
-    expectBox(t, c, 10.0, 100.0, 100.0, 10.0, "a stretched child is the column's inner width")
+    t.layout(st, 800.0, 600.0, m)
+    expectBox(t, c, 10.0, 100.0, 100.0, 10.0, "a hugging column stretches a content-width child to its own width")
+    expectBox(t, b, 10.0, 55.0, 50.0, 40.0, "a fixed width isn't stretched")
+    // A column with a definite width stretches at once; FLEX_HUG and no-stretch keep their own.
+    var u = flexTree()
+    val root = u.add(-1)
+    val plain = u.add(root)
+    u.setHeight(plain, FLEX_FIXED, 10.0)
+    val hug = u.add(root)
+    u.setWidth(hug, FLEX_HUG, 0.0)
+    val unusedHug = fixed(u, hug, 30.0, 10.0)
+    val icon = u.add(root)
+    u.setIntrinsic(icon, 24.0, 24.0)
+    u.setNoStretch(icon, true)
+    val line = u.add(root)
+    u.setIntrinsic(line, FLEX_INTRINSIC_ROOM, 1.0)
+    val gapBox = u.add(root)
+    u.setIntrinsic(gapBox, 8.0, 8.0)
+    u.setNoStretch(gapBox, true)
+    u.layout(root, 300.0, 200.0, m)
+    expectBox(u, plain, 0.0, 0.0, 300.0, 10.0, "a column stretches a content-width child")
+    expectBox(u, hug, 0.0, 10.0, 30.0, 10.0, "a hugging width isn't stretched")
+    expectBox(u, icon, 0.0, 20.0, 24.0, 24.0, "an intrinsic size, not stretched (an icon)")
+    expectBox(u, line, 0.0, 44.0, 300.0, 1.0, "an intrinsic width of all the room (a divider)")
+    expectBox(u, gapBox, 0.0, 45.0, 8.0, 8.0, "a spacer's own size")
+    return
+}
 
-    // A row with fill: grow shares the room.
+fun oneGrowing(): void {
+    var m = textMeasure()
+    var t = flexTree()
+    val st = stage(t)
+    val col = t.add(st)
+    val g = t.add(col)
+    t.setFlex(g, 1.0, 1.0)
+    val f = fixed(t, col, 10.0, 10.0)
+    t.layout(st, 800.0, 600.0, m)
+    expectBox(t, col, 0.0, 0.0, 10.0, 10.0, "a column of its content's height doesn't grow its growers")
+    t.setHeight(col, FLEX_FIXED, 100.0)
+    t.layout(st, 800.0, 600.0, m)
+    expectBox(t, g, 0.0, 0.0, 10.0, 90.0, "a column with a definite height gives its grower the rest")
+    expectBox(t, f, 0.0, 90.0, 10.0, 10.0, "and what follows comes after it")
+
+    // A row: growers share the inner width left by the others.
     var r = flexTree()
-    val row = r.add(-1)
+    val rs = stage(r)
+    val row = r.add(rs)
     r.setDir(row, FLEX_ROW)
     r.setWidth(row, FLEX_FIXED, 400.0)
     r.setGap(row, 10.0)
@@ -95,49 +148,335 @@ fun columnAndRow(): void {
     r.setHeight(g1, FLEX_FIXED, 20.0)
     val g2 = r.add(row)
     r.setFlex(g2, 3.0, 1.0)
-    r.layout(row, 800.0, 600.0, m)
+    r.layout(rs, 800.0, 600.0, m)
     // room 400 − 100 − 2·10 = 280: 70 and 210.
     expectBox(r, f1, 0.0, 0.0, 100.0, 20.0, "fixed child in a row")
     expectBox(r, g1, 110.0, 0.0, 70.0, 20.0, "grow 1 takes a quarter of the room")
-    expectBox(r, g2, 190.0, 0.0, 210.0, 20.0, "grow 3 takes three quarters and stretches to the row's height")
+    expectBox(r, g2, 190.0, 10.0, 210.0, 0.0, "grow 3 takes three quarters; a row centres across by default")
     check(near(r.h[row], 20.0), "a row is as tall as its tallest child")
+    r.setAlign(row, FLEX_STRETCH, FLEX_AUTO)
+    r.layout(rs, 800.0, 600.0, m)
+    expectBox(r, g2, 190.0, 0.0, 210.0, 20.0, "align stretch gives a child the row's height")
     r.setFlex(g1, 0.0, 1.0)
     r.setFlex(g2, 0.0, 1.0)
     r.setWidth(g2, FLEX_FILL, 0.0)
-    r.layout(row, 800.0, 600.0, m)
+    r.layout(rs, 800.0, 600.0, m)
     check(near(r.w[g2], 400.0 - 100.0 - 20.0 - r.w[g1]) && near(r.x[g2] + r.w[g2], 400.0), "a fill width takes the rest of the row (${show(r, g2)})")
     return
 }
 
-fun justifyAndAlign(): void {
+fun oneWholePixels(): void {
     var m = textMeasure()
     var t = flexTree()
-    val row = t.add(-1)
+    val st = stage(t)
+    val row = t.add(st)
+    t.setDir(row, FLEX_ROW)
+    t.setWidth(row, FLEX_FIXED, 100.0)
+    val kids: array<int> = []
+    for (i in 0 until 3) {
+        val k = t.add(row)
+        t.setFlex(k, 1.0, 1.0)
+        t.setHeight(k, FLEX_FIXED, 10.0)
+        kids.append(k)
+    }
+    t.layout(st, 800.0, 600.0, m)
+    expectBox(t, kids[1], 33.0, 0.0, 33.0, 10.0, "three growers in 100 px: 33 each (shares truncate)")
+    expectBox(t, kids[2], 66.0, 0.0, 33.0, 10.0, "and the last pixel is left over")
+    val col = t.add(st)
+    t.setWidth(col, FLEX_FIXED, 10.0)
+    t.setHeight(col, FLEX_FIXED, 10.0)
+    t.setAlign(col, FLEX_CENTER, FLEX_CENTER)
+    val dot = fixed(t, col, 3.0, 3.0)
+    t.layout(st, 800.0, 600.0, m)
+    expectBox(t, dot, 3.0, 3.0, 3.0, 3.0, "centring truncates: 3 px in 10 px sits at 3")
+    t.setWidth(row, FLEX_FIXED, 100.5)
+    t.layout(st, 800.5, 600.0, m)
+    check(near(t.w[st], 800.0) && near(t.w[row], 100.5), "the root's box is whole pixels; a fixed size is as given (${t.w[row]})")
+    return
+}
+
+fun oneRowRoom(): void {
+    var m = textMeasure()
+    var t = flexTree()
+    val st = stage(t)
+    val row = t.add(st)
+    t.setDir(row, FLEX_ROW)
+    t.setWidth(row, FLEX_FIXED, 200.0)
+    t.setAlign(row, FLEX_START, FLEX_AUTO)
+    val a = t.add(row)
+    t.setMeasured(a, true)
+    m.texts.set(a, "aaaaaaaaaaaaaaa")
+    val b = t.add(row)
+    t.setMeasured(b, true)
+    m.texts.set(b, "bbbbbbbbbbbbbbb")
+    t.layout(st, 800.0, 600.0, m)
+    expectBox(t, a, 0.0, 0.0, 150.0, 20.0, "in order: the first text takes the room it needs")
+    expectBox(t, b, 150.0, 0.0, 50.0, 60.0, "the second gets what's left and wraps")
+    // Text beside a fixed box: the room left, its own width after wrapping.
+    var r = flexTree()
+    val rs = stage(r)
+    val row2 = r.add(rs)
+    r.setDir(row2, FLEX_ROW)
+    r.setWidth(row2, FLEX_FIXED, 150.0)
+    r.setAlign(row2, FLEX_START, FLEX_START)
+    val icon = fixed(r, row2, 30.0, 30.0)
+    val words = r.add(row2)
+    r.setMeasured(words, true)
+    m.texts.set(words, "hello big world")
+    r.layout(rs, 800.0, 600.0, m)
+    expectBox(r, words, 30.0, 0.0, 90.0, 40.0, "text wraps in the room left in a row, as wide as its widest line")
+    check(near(r.w[icon], 30.0), "the fixed box keeps its width")
+    return
+}
+
+fun oneAlignAndJustify(): void {
+    var m = textMeasure()
+    var t = flexTree()
+    val st = stage(t)
+    val row = t.add(st)
     t.setDir(row, FLEX_ROW)
     t.setWidth(row, FLEX_FIXED, 300.0)
     t.setHeight(row, FLEX_FIXED, 100.0)
     t.setAlign(row, FLEX_CENTER, FLEX_CENTER)
     val a = fixed(t, row, 50.0, 20.0)
     val b = fixed(t, row, 50.0, 40.0)
-    t.layout(row, 800.0, 600.0, m)
+    t.layout(st, 800.0, 600.0, m)
     expectBox(t, a, 100.0, 40.0, 50.0, 20.0, "centred both ways (a)")
     expectBox(t, b, 150.0, 30.0, 50.0, 40.0, "centred both ways (b)")
     t.setAlign(row, FLEX_END, FLEX_END)
-    t.layout(row, 800.0, 600.0, m)
+    t.layout(st, 800.0, 600.0, m)
     expectBox(t, a, 200.0, 80.0, 50.0, 20.0, "end both ways (a)")
     t.setAlign(row, FLEX_START, FLEX_BETWEEN)
-    t.layout(row, 800.0, 600.0, m)
+    t.layout(st, 800.0, 600.0, m)
     expectBox(t, b, 250.0, 0.0, 50.0, 40.0, "space between puts the last child at the end")
     t.setAlignSelf(b, FLEX_END)
-    t.layout(row, 800.0, 600.0, m)
+    t.layout(st, 800.0, 600.0, m)
     expectBox(t, b, 250.0, 60.0, 50.0, 40.0, "alignSelf overrides the row's align")
+    t.setAlign(row, FLEX_AUTO, FLEX_START)
+    t.setAlignSelf(b, FLEX_AUTO)
+    t.layout(st, 800.0, 600.0, m)
+    expectBox(t, a, 0.0, 40.0, 50.0, 20.0, "a row's default align centres across")
+
+    // A stack: one align places its children both ways.
+    var s = flexTree()
+    val ss = stage(s)
+    val stack = s.add(ss)
+    s.setDir(stack, FLEX_STACK)
+    s.setAlign(stack, FLEX_CENTER, FLEX_AUTO)
+    val big = fixed(s, stack, 100.0, 60.0)
+    val small = fixed(s, stack, 20.0, 10.0)
+    s.layout(ss, 800.0, 600.0, m)
+    expectBox(s, stack, 0.0, 0.0, 100.0, 60.0, "a stack is as big as its biggest child")
+    expectBox(s, small, 40.0, 25.0, 20.0, 10.0, "a stack's align centres both ways")
+    expectBox(s, big, 0.0, 0.0, 100.0, 60.0, "the biggest child fills the stack")
+    s.setAlign(stack, FLEX_END, FLEX_START)
+    s.layout(ss, 800.0, 600.0, m)
+    expectBox(s, small, 80.0, 50.0, 20.0, 10.0, "end both ways; justify plays no part")
     return
 }
 
-fun shrinkAndClamp(): void {
+fun oneClamps(): void {
+    var m = textMeasure()
+    var u = flexTree()
+    val col = u.add(-1)
+    val g = u.add(col)
+    u.setWidth(g, FLEX_FILL, 0.0)
+    u.setHeight(g, FLEX_FIXED, 10.0)
+    u.setMinMax(g, 0.0, 120.0, 0.0, FLEX_INF)
+    val label = u.add(col)
+    u.setWidth(label, FLEX_FILL, 0.0)
+    u.setMeasured(label, true)
+    m.texts.set(label, "hi")
+    u.setMinMax(label, 0.0, 120.0, 0.0, FLEX_INF)
+    u.layout(col, 300.0, 600.0, m)
+    // abla-one: a container its parent sizes keeps that size; only a leaf is clamped then.
+    // Listed as a rule that may be an accident (see the README).
+    check(near(u.w[g], 300.0), "a column given its parent's width keeps it over its maximum (${u.w[g]})")
+    check(near(u.w[label], 120.0), "a leaf given its parent's width is clamped to its maximum (${u.w[label]})")
+    var t = flexTree()
+    val st = stage(t)
+    val hugging = t.add(st)
+    t.setMinMax(hugging, 0.0, 50.0, 30.0, FLEX_INF)
+    val unusedWide = fixed(t, hugging, 80.0, 10.0)
+    t.layout(st, 800.0, 600.0, m)
+    expectBox(t, hugging, 0.0, 0.0, 50.0, 30.0, "a hugging column is clamped both ways")
+    return
+}
+
+fun oneWrapRow(): void {
     var m = textMeasure()
     var t = flexTree()
-    val row = t.add(-1)
+    val st = stage(t)
+    val row = t.add(st)
+    t.setDir(row, FLEX_ROW)
+    t.setWrap(row, true)
+    t.setWidth(row, FLEX_FIXED, 250.0)
+    t.setGap(row, 10.0)
+    val kids: array<int> = []
+    for (i in 0 until 5) kids.append(fixed(t, row, 70.0, 30.0))
+    t.layout(st, 800.0, 600.0, m)
+    // 70 + 10 + 70 + 10 + 70 = 230 fits; the fourth starts a new line, one gap down.
+    expectBox(t, kids[2], 160.0, 0.0, 70.0, 30.0, "third item ends the first line")
+    expectBox(t, kids[3], 0.0, 40.0, 70.0, 30.0, "fourth item wraps under the gap")
+    check(near(t.h[row], 70.0), "a wrapped row is as tall as its lines")
+    return
+}
+
+fun oneScrolling(): void {
+    var m = textMeasure()
+    var t = flexTree()
+    val st = stage(t)
+    val view = t.add(st)
+    t.setHeight(view, FLEX_FIXED, 100.0)
+    t.setWidth(view, FLEX_FIXED, 80.0)
+    t.setScroll(view, false, true)
+    t.setGap(view, 10.0)
+    val rows: array<int> = []
+    for (i in 0 until 5) {
+        val r = t.add(view)
+        t.setHeight(r, FLEX_FIXED, 40.0)
+        rows.append(r)
+    }
+    t.layout(st, 800.0, 600.0, m)
+    check(near(t.h[view], 100.0) && near(t.contentH[view], 240.0), "a scroller keeps its height and reports its content's (${t.contentH[view]})")
+    expectBox(t, rows[4], 0.0, 200.0, 80.0, 40.0, "rows past the view are laid out at their natural place")
+
+    // A scroll area of no set height takes the room it has, however short its content.
+    var u = flexTree()
+    val us = stage(u)
+    val col = u.add(us)
+    u.setHeight(col, FLEX_FIXED, 120.0)
+    val list = u.add(col)
+    u.setScroll(list, false, true)
+    for (i in 0 until 2) {
+        val unused = fixed(u, list, 10.0, 30.0)
+    }
+    u.layout(us, 800.0, 600.0, m)
+    check(near(u.h[list], 120.0) && near(u.contentH[list], 60.0), "a short list takes the room (${u.h[list]})")
+    for (i in 0 until 6) {
+        val unused = fixed(u, list, 10.0, 30.0)
+    }
+    u.layout(us, 800.0, 600.0, m)
+    check(near(u.h[list], 120.0) && near(u.contentH[list], 240.0), "a long list stops at the room and scrolls (${u.h[list]})")
+
+    // A scrolling row: its children at their own widths, centred down; as wide as its room.
+    var r = flexTree()
+    val rs = stage(r)
+    val strip = r.add(rs)
+    r.setDir(strip, FLEX_ROW)
+    r.setScroll(strip, true, false)
+    r.setGap(strip, 10.0)
+    val tall = fixed(r, strip, 300.0, 40.0)
+    val unusedB = fixed(r, strip, 300.0, 20.0)
+    val last = fixed(r, strip, 300.0, 20.0)
+    r.layout(rs, 800.0, 600.0, m)
+    check(near(r.w[strip], 800.0) && near(r.h[strip], 40.0) && near(r.contentW[strip], 920.0), "a scrolling row takes its room and reports its content's width (${show(r, strip)} ${r.contentW[strip]})")
+    expectBox(r, last, 620.0, 10.0, 300.0, 20.0, "past its width at its natural place, centred down")
+    check(near(r.y[tall], 0.0), "the tallest sets the height")
+    return
+}
+
+fun onePopover(): void {
+    var m = textMeasure()
+    var t = flexTree()
+    val st = stage(t)
+    val pop = t.add(st)
+    t.setDir(pop, FLEX_POPOVER)
+    val anchor = fixed(t, pop, 100.0, 30.0)
+    val panel = t.add(pop)
+    t.setWidth(panel, FLEX_FILL, 0.0)
+    val unused = fixed(t, panel, 200.0, 50.0)
+    t.layout(st, 800.0, 600.0, m)
+    expectBox(t, pop, 0.0, 0.0, 100.0, 30.0, "a popover is its anchor's size")
+    expectBox(t, anchor, 0.0, 0.0, 100.0, 30.0, "the anchor is laid out in place")
+    expectBox(t, panel, 0.0, 0.0, 784.0, 50.0, "the panel floats, with the root's room less 16")
+    return
+}
+
+fun cssColumnAndRow(): void {
+    var m = textMeasure()
+    var t = flexTree()
+    val stRoot = stage(t)
+    val root = t.add(stRoot)
+    t.setCss(root, true)
+    t.setPadding(root, 10.0, 20.0, 10.0, 20.0)
+    t.setGap(root, 5.0)
+    t.setAlign(root, FLEX_START, FLEX_START)
+    val a = fixed(t, root, 100.0, 30.0)
+    val b = fixed(t, root, 50.0, 40.0)
+    t.layout(stRoot, 800.0, 600.0, m)
+    expectBox(t, root, 0.0, 0.0, 120.0, 115.0, "css: a column hugs its content plus padding")
+    expectBox(t, a, 10.0, 20.0, 100.0, 30.0, "css: first child at the padding")
+    expectBox(t, b, 10.0, 55.0, 50.0, 40.0, "css: second child after the gap")
+
+    // Stretch (the default): a content-width child takes the column's width.
+    t.setAlign(root, FLEX_STRETCH, FLEX_START)
+    val c = t.add(root)
+    t.setHeight(c, FLEX_FIXED, 10.0)
+    t.layout(stRoot, 800.0, 600.0, m)
+    expectBox(t, c, 10.0, 100.0, 100.0, 10.0, "css: a stretched child is the column's inner width")
+
+    // A row with fill: grow shares the room.
+    var r = flexTree()
+    val stRow = stage(r)
+    val row = r.add(stRow)
+    r.setCss(row, true)
+    r.setDir(row, FLEX_ROW)
+    r.setWidth(row, FLEX_FIXED, 400.0)
+    r.setGap(row, 10.0)
+    val f1 = fixed(r, row, 100.0, 20.0)
+    val g1 = r.add(row)
+    r.setFlex(g1, 1.0, 1.0)
+    r.setHeight(g1, FLEX_FIXED, 20.0)
+    val g2 = r.add(row)
+    r.setFlex(g2, 3.0, 1.0)
+    r.layout(stRow, 800.0, 600.0, m)
+    // room 400 − 100 − 2·10 = 280: 70 and 210.
+    expectBox(r, f1, 0.0, 0.0, 100.0, 20.0, "css: fixed child in a row")
+    expectBox(r, g1, 110.0, 0.0, 70.0, 20.0, "css: grow 1 takes a quarter of the room")
+    expectBox(r, g2, 190.0, 0.0, 210.0, 20.0, "css: grow 3 takes three quarters and stretches to the row's height")
+    check(near(r.h[row], 20.0), "css: a row is as tall as its tallest child")
+    r.setFlex(g1, 0.0, 1.0)
+    r.setFlex(g2, 0.0, 1.0)
+    r.setWidth(g2, FLEX_FILL, 0.0)
+    r.layout(stRow, 800.0, 600.0, m)
+    check(near(r.w[g2], 400.0 - 100.0 - 20.0 - r.w[g1]) && near(r.x[g2] + r.w[g2], 400.0), "css: a fill width takes the rest of the row (${show(r, g2)})")
+    return
+}
+
+fun cssJustifyAndAlign(): void {
+    var m = textMeasure()
+    var t = flexTree()
+    val stRow = stage(t)
+    val row = t.add(stRow)
+    t.setCss(row, true)
+    t.setDir(row, FLEX_ROW)
+    t.setWidth(row, FLEX_FIXED, 300.0)
+    t.setHeight(row, FLEX_FIXED, 100.0)
+    t.setAlign(row, FLEX_CENTER, FLEX_CENTER)
+    val a = fixed(t, row, 50.0, 20.0)
+    val b = fixed(t, row, 50.0, 40.0)
+    t.layout(stRow, 800.0, 600.0, m)
+    expectBox(t, a, 100.0, 40.0, 50.0, 20.0, "css: centred both ways (a)")
+    expectBox(t, b, 150.0, 30.0, 50.0, 40.0, "css: centred both ways (b)")
+    t.setAlign(row, FLEX_END, FLEX_END)
+    t.layout(stRow, 800.0, 600.0, m)
+    expectBox(t, a, 200.0, 80.0, 50.0, 20.0, "css: end both ways (a)")
+    t.setAlign(row, FLEX_START, FLEX_BETWEEN)
+    t.layout(stRow, 800.0, 600.0, m)
+    expectBox(t, b, 250.0, 0.0, 50.0, 40.0, "css: space between puts the last child at the end")
+    t.setAlignSelf(b, FLEX_END)
+    t.layout(stRow, 800.0, 600.0, m)
+    expectBox(t, b, 250.0, 60.0, 50.0, 40.0, "css: alignSelf overrides the row's align")
+    return
+}
+
+fun cssShrinkAndClamp(): void {
+    var m = textMeasure()
+    var t = flexTree()
+    val stRow = stage(t)
+    val row = t.add(stRow)
+    t.setCss(row, true)
     t.setDir(row, FLEX_ROW)
     t.setWidth(row, FLEX_FIXED, 200.0)
     // Two content-sized boxes of 150 (their fixed child) share 200: shrink by size.
@@ -145,43 +484,47 @@ fun shrinkAndClamp(): void {
     val unusedA = fixed(t, a, 150.0, 10.0)
     val b = t.add(row)
     val unusedB = fixed(t, b, 150.0, 10.0)
-    t.layout(row, 800.0, 600.0, m)
-    check(near(t.w[a], 100.0) && near(t.w[b], 100.0) && near(t.x[b], 100.0), "overflow shrinks children evenly by size (${show(t, a)} ${show(t, b)})")
+    t.layout(stRow, 800.0, 600.0, m)
+    check(near(t.w[a], 100.0) && near(t.w[b], 100.0) && near(t.x[b], 100.0), "css: overflow shrinks children evenly by size (${show(t, a)} ${show(t, b)})")
     t.setMinMax(a, 140.0, FLEX_INF, 0.0, FLEX_INF)
-    t.layout(row, 800.0, 600.0, m)
-    check(near(t.w[a], 140.0), "a minimum width holds against shrinking")
+    t.layout(stRow, 800.0, 600.0, m)
+    check(near(t.w[a], 140.0), "css: a minimum width holds against shrinking")
     t.setFlex(b, 0.0, 0.0)
     t.setMinMax(a, 0.0, FLEX_INF, 0.0, FLEX_INF)
-    t.layout(row, 800.0, 600.0, m)
-    check(near(t.w[b], 150.0) && near(t.w[a], 50.0), "shrink 0 keeps a child's size, the other gives way")
+    t.layout(stRow, 800.0, 600.0, m)
+    check(near(t.w[b], 150.0) && near(t.w[a], 50.0), "css: shrink 0 keeps a child's size, the other gives way")
 
     var u = flexTree()
-    val col = u.add(-1)
+    val stCol = stage(u)
+    val col = u.add(stCol)
+    u.setCss(col, true)
     val g = u.add(col)
     u.setWidth(g, FLEX_FILL, 0.0)
     u.setHeight(g, FLEX_FIXED, 10.0)
     u.setMinMax(g, 0.0, 120.0, 0.0, FLEX_INF)
     u.setWidth(col, FLEX_FIXED, 300.0)
-    u.layout(col, 800.0, 600.0, m)
-    check(near(u.w[g], 120.0), "a maximum width holds against fill")
+    u.layout(stCol, 800.0, 600.0, m)
+    check(near(u.w[g], 120.0), "css: a maximum width holds against fill")
     return
 }
 
-fun wrapping(): void {
+fun cssWrapping(): void {
     var m = textMeasure()
     var t = flexTree()
-    val row = t.add(-1)
+    val stRow = stage(t)
+    val row = t.add(stRow)
+    t.setCss(row, true)
     t.setDir(row, FLEX_ROW)
     t.setWrap(row, true)
     t.setWidth(row, FLEX_FIXED, 250.0)
     t.setGaps(row, 10.0, 5.0)
     val kids: array<int> = []
     for (i in 0 until 5) kids.append(fixed(t, row, 70.0, 30.0))
-    t.layout(row, 800.0, 600.0, m)
+    t.layout(stRow, 800.0, 600.0, m)
     // 70 + 10 + 70 + 10 + 70 = 230 fits; the fourth starts a new line 35 down.
-    expectBox(t, kids[2], 160.0, 0.0, 70.0, 30.0, "third item ends the first line")
-    expectBox(t, kids[3], 0.0, 35.0, 70.0, 30.0, "fourth item wraps under the cross gap")
-    check(near(t.h[row], 65.0), "a wrapped row is as tall as its lines")
+    expectBox(t, kids[2], 160.0, 0.0, 70.0, 30.0, "css: third item ends the first line")
+    expectBox(t, kids[3], 0.0, 35.0, 70.0, 30.0, "css: fourth item wraps under the cross gap")
+    check(near(t.h[row], 65.0), "css: a wrapped row is as tall as its lines")
     return
 }
 
@@ -206,17 +549,23 @@ fun text(): void {
     var m = textMeasure()
     var t = flexTree()
     val col = t.add(-1)
-    t.setWidth(col, FLEX_FIXED, 100.0)
     val label = t.add(col)
     t.setMeasured(label, true)
     m.texts.set(label, "hello big world")
     val below = fixed(t, col, 10.0, 10.0)
-    t.layout(col, 800.0, 600.0, m)
+    t.layout(col, 100.0, 600.0, m)
     expectBox(t, label, 0.0, 0.0, 100.0, 40.0, "wrapped text takes two lines")
     check(near(t.y[below], 40.0), "what follows the text sits under it")
-    // In a row, text sized to its content beside a fixed box, then squeezed: it wraps.
+    return
+}
+
+fun cssText(): void {
+    var m = textMeasure()
+    // In a CSS row, text sized to its content beside a fixed box, then squeezed: it wraps.
     var r = flexTree()
-    val row = r.add(-1)
+    val stRow = stage(r)
+    val row = r.add(stRow)
+    r.setCss(row, true)
     r.setDir(row, FLEX_ROW)
     r.setWidth(row, FLEX_FIXED, 150.0)
     r.setAlign(row, FLEX_START, FLEX_START)
@@ -224,16 +573,54 @@ fun text(): void {
     val words = r.add(row)
     r.setMeasured(words, true)
     m.texts.set(words, "hello big world")
-    r.layout(row, 800.0, 600.0, m)
-    check(near(r.w[words], 120.0) && near(r.h[words], 40.0) && near(r.x[words], 30.0), "text shrinks into the room left in a row and wraps (${show(r, words)})")
-    check(near(r.w[icon], 30.0), "the fixed box keeps its width")
+    r.layout(stRow, 800.0, 600.0, m)
+    check(near(r.w[words], 120.0) && near(r.h[words], 40.0) && near(r.x[words], 30.0), "css: text shrinks into the room left in a row and wraps (${show(r, words)})")
+    check(near(r.w[icon], 30.0), "css: the fixed box keeps its width")
+    // Fractions stay: three growers share 100 px in thirds.
+    var g = flexTree()
+    val stG = stage(g)
+    val thirds = g.add(stG)
+    g.setCss(thirds, true)
+    g.setDir(thirds, FLEX_ROW)
+    g.setWidth(thirds, FLEX_FIXED, 100.0)
+    val kids: array<int> = []
+    for (i in 0 until 3) {
+        val k = g.add(thirds)
+        g.setFlex(k, 1.0, 1.0)
+        kids.append(k)
+    }
+    g.layout(stG, 800.0, 600.0, m)
+    check(near(g.w[kids[1]], 100.0 / 3.0) && near(g.x[kids[2]], 200.0 / 3.0), "css: growers share in fractions (${show(g, kids[2])})")
     return
 }
 
-fun absoluteAndStack(): void {
+fun absolute(): void {
     var m = textMeasure()
     var t = flexTree()
     val screen = t.add(-1)
+    val gear = fixed(t, screen, 44.0, 44.0)
+    t.setAbsolute(gear, FLEX_ANCHOR_TOP_RIGHT, 18.0, 18.0)
+    val toast = fixed(t, screen, 200.0, 40.0)
+    t.setAbsolute(toast, FLEX_ANCHOR_BOTTOM, 0.0, 30.0)
+    val flow = fixed(t, screen, 10.0, 10.0)
+    t.layout(screen, 1280.0, 720.0, m)
+    expectBox(t, screen, 0.0, 0.0, 1280.0, 720.0, "the root takes the screen")
+    expectBox(t, gear, 1218.0, 18.0, 44.0, 44.0, "top-right anchor inset from the edges")
+    expectBox(t, toast, 540.0, 650.0, 200.0, 40.0, "bottom anchor centred, inset from the bottom")
+    expectBox(t, flow, 0.0, 0.0, 10.0, 10.0, "absolute children take no room in the flow")
+    t.layout(screen, 800.0, 600.0, m)
+    expectBox(t, gear, 738.0, 18.0, 44.0, 44.0, "anchors follow a resize")
+    t.layout(screen, 801.0, 600.0, m)
+    expectBox(t, toast, 300.0, 530.0, 200.0, 40.0, "centring an anchor truncates")
+    return
+}
+
+fun cssAbsoluteAndStack(): void {
+    var m = textMeasure()
+    var t = flexTree()
+    val stScreen = stage(t)
+    val screen = t.add(stScreen)
+    t.setCss(screen, true)
     t.setWidth(screen, FLEX_FILL, 0.0)
     t.setHeight(screen, FLEX_FILL, 0.0)
     val gear = fixed(t, screen, 44.0, 44.0)
@@ -241,31 +628,35 @@ fun absoluteAndStack(): void {
     val toast = fixed(t, screen, 200.0, 40.0)
     t.setAbsolute(toast, FLEX_ANCHOR_BOTTOM, 0.0, 30.0)
     val flow = fixed(t, screen, 10.0, 10.0)
-    t.layout(screen, 1280.0, 720.0, m)
-    expectBox(t, screen, 0.0, 0.0, 1280.0, 720.0, "a fill root takes the screen")
-    expectBox(t, gear, 1218.0, 18.0, 44.0, 44.0, "top-right anchor inset from the edges")
-    expectBox(t, toast, 540.0, 650.0, 200.0, 40.0, "bottom anchor centred, inset from the bottom")
-    expectBox(t, flow, 0.0, 0.0, 10.0, 10.0, "absolute children take no room in the flow")
-    t.layout(screen, 800.0, 600.0, m)
-    expectBox(t, gear, 738.0, 18.0, 44.0, 44.0, "anchors follow a resize")
+    t.layout(stScreen, 1280.0, 720.0, m)
+    expectBox(t, screen, 0.0, 0.0, 1280.0, 720.0, "css: a fill root takes the screen")
+    expectBox(t, gear, 1218.0, 18.0, 44.0, 44.0, "css: top-right anchor inset from the edges")
+    expectBox(t, toast, 540.0, 650.0, 200.0, 40.0, "css: bottom anchor centred, inset from the bottom")
+    expectBox(t, flow, 0.0, 0.0, 10.0, 10.0, "css: absolute children take no room in the flow")
+    t.layout(stScreen, 800.0, 600.0, m)
+    expectBox(t, gear, 738.0, 18.0, 44.0, 44.0, "css: anchors follow a resize")
 
     var s = flexTree()
-    val stack = s.add(-1)
+    val stStack = stage(s)
+    val stack = s.add(stStack)
+    s.setCss(stack, true)
     s.setDir(stack, FLEX_STACK)
     s.setAlign(stack, FLEX_CENTER, FLEX_END)
     val big = fixed(s, stack, 100.0, 60.0)
     val small = fixed(s, stack, 20.0, 10.0)
-    s.layout(stack, 800.0, 600.0, m)
-    expectBox(s, stack, 0.0, 0.0, 100.0, 60.0, "a stack is as big as its biggest child")
-    expectBox(s, small, 40.0, 50.0, 20.0, 10.0, "stack children are placed by align (x) and justify (y)")
-    expectBox(s, big, 0.0, 0.0, 100.0, 60.0, "the biggest child fills the stack")
+    s.layout(stStack, 800.0, 600.0, m)
+    expectBox(s, stack, 0.0, 0.0, 100.0, 60.0, "css: a stack is as big as its biggest child")
+    expectBox(s, small, 40.0, 50.0, 20.0, 10.0, "css: stack children are placed by align (x) and justify (y)")
+    expectBox(s, big, 0.0, 0.0, 100.0, 60.0, "css: the biggest child fills the stack")
     return
 }
 
-fun scrolling(): void {
+fun cssScrolling(): void {
     var m = textMeasure()
     var t = flexTree()
-    val view = t.add(-1)
+    val stView = stage(t)
+    val view = t.add(stView)
+    t.setCss(view, true)
     t.setHeight(view, FLEX_FIXED, 100.0)
     t.setWidth(view, FLEX_FIXED, 80.0)
     t.setScroll(view, false, true)
@@ -276,26 +667,29 @@ fun scrolling(): void {
         t.setHeight(r, FLEX_FIXED, 40.0)
         rows.append(r)
     }
-    t.layout(view, 800.0, 600.0, m)
-    check(near(t.h[view], 100.0) && near(t.contentH[view], 240.0), "a scroller keeps its height and reports its content's (${t.contentH[view]})")
-    expectBox(t, rows[4], 0.0, 200.0, 80.0, 40.0, "rows past the view are laid out at their natural place")
+    t.layout(stView, 800.0, 600.0, m)
+    check(near(t.h[view], 100.0) && near(t.contentH[view], 240.0), "css: a scroller keeps its height and reports its content's (${t.contentH[view]})")
+    expectBox(t, rows[4], 0.0, 200.0, 80.0, 40.0, "css: rows past the view are laid out at their natural place")
 
     // Content-sized scroller under a bound: as big as its content up to the room.
     var u = flexTree()
-    val col = u.add(-1)
+    val stCol = stage(u)
+    val col = u.add(stCol)
+    u.setCss(col, true)
     u.setHeight(col, FLEX_FIXED, 120.0)
     val list = u.add(col)
+    u.setCss(list, true)
     u.setScroll(list, false, true)
     for (i in 0 until 2) {
         val unused = fixed(u, list, 10.0, 30.0)
     }
-    u.layout(col, 800.0, 600.0, m)
-    check(near(u.h[list], 60.0), "a short list is its content's height")
+    u.layout(stCol, 800.0, 600.0, m)
+    check(near(u.h[list], 60.0), "css: a short list is its content's height")
     for (i in 0 until 6) {
         val unused = fixed(u, list, 10.0, 30.0)
     }
-    u.layout(col, 800.0, 600.0, m)
-    check(near(u.h[list], 120.0) && near(u.contentH[list], 240.0), "a long list stops at the room and scrolls (${u.h[list]})")
+    u.layout(stCol, 800.0, 600.0, m)
+    check(near(u.h[list], 120.0) && near(u.contentH[list], 240.0), "css: a long list stops at the room and scrolls (${u.h[list]})")
     return
 }
 
@@ -371,14 +765,25 @@ fun caching(): void {
 }
 
 fun main: int {
-    columnAndRow()
-    justifyAndAlign()
-    shrinkAndClamp()
-    wrapping()
+    oneColumn()
+    oneGrowing()
+    oneWholePixels()
+    oneRowRoom()
+    oneAlignAndJustify()
+    oneClamps()
+    oneWrapRow()
+    oneScrolling()
+    onePopover()
     text()
-    absoluteAndStack()
-    scrolling()
+    absolute()
     caching()
+    cssColumnAndRow()
+    cssText()
+    cssJustifyAndAlign()
+    cssShrinkAndClamp()
+    cssWrapping()
+    cssAbsoluteAndStack()
+    cssScrolling()
     println("flex: $passed passed, $failed failed")
     if (failed == 0) 0 else 1
 }

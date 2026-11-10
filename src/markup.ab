@@ -102,7 +102,7 @@ fun uiWords(text: string): array<string> {
 
 fun uiAlignWord(text: string): int =
     if (text == "center") FLEX_CENTER else if (text == "end") FLEX_END else if (text == "stretch") FLEX_STRETCH
-    else if (text == "between" || text == "space-between") FLEX_BETWEEN else FLEX_START
+    else if (text == "between" || text == "space-between") FLEX_BETWEEN else if (text == "auto") FLEX_AUTO else FLEX_START
 
 fun uiAnchorWord(text: string): int =
     if (text == "top") FLEX_ANCHOR_TOP else if (text == "top-right") FLEX_ANCHOR_TOP_RIGHT
@@ -111,7 +111,7 @@ fun uiAnchorWord(text: string): int =
     else if (text == "bottom") FLEX_ANCHOR_BOTTOM else if (text == "bottom-right") FLEX_ANCHOR_BOTTOM_RIGHT
     else FLEX_ANCHOR_TOP_LEFT
 
-fun uiSize(text: string): f64 = if (text == "fill") SIZE_FILL else if (text == "content" || text == "auto") SIZE_CONTENT else uiNumber(text)
+fun uiSize(text: string): f64 = if (text == "fill") SIZE_FILL else if (text == "hug") SIZE_HUG else if (text == "content" || text == "auto") SIZE_CONTENT else uiNumber(text)
 
 fun uiWeight(text: string): f64 =
     if (text == "bold") 700.0 else if (text == "semibold") 600.0 else if (text == "medium") 500.0
@@ -149,6 +149,7 @@ fun uiProperty(property: string, value: string): Style {
         "align" -> return style().align(uiAlignWord(value))
         "justify" -> return style().justify(uiAlignWord(value))
         "alignSelf" -> return style().alignSelf(uiAlignWord(value))
+        "layout" -> return if (value == "css") style().cssLayout() else style()
         "wrap" -> return if (value == "false") style() else style().wrap()
         "direction" -> return if (value == "row") style().row() else if (value == "stack") style().stack() else style().column()
         "scroll" -> return style().scroll(if (value == "x") SCROLL_X else if (value == "both") SCROLL_X | SCROLL_Y else SCROLL_Y)
