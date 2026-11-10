@@ -183,6 +183,29 @@ Other behaviours are modes a container asks for:
 
 The mode applies to one container's own children; their children follow their own mode.
 
+## State's contract
+
+What abla-one and NovaKind rely on, each held by a test:
+
+- A `State` read is a load of its value and nothing else; a write that changes it moves the
+  global revision and nothing else. It keeps nothing outside itself. (`tests/revision_test.ab`;
+  abla-one's `tests/state_size.sh` checks the read costs what a field read costs.)
+- A `Tracked` nobody has read under a render scope keeps nothing global: no table entry, no
+  slot. What it keeps for a reader goes when the reader does, after a change or a sweep
+  amortized over ended scopes, and ended scopes are forgotten once swept.
+  (`tests/state_leak_test.ab`.)
+- Both read through any reference: a `val`, an immutable parameter, a field of an immutable
+  object, several reads as one call's arguments. (`tests/state_read_test.ab`,
+  `tests/revision_test.ab`.)
+- Both are confined to one thread. The revision and Tracked's tables are process globals, and
+  the compiler enforces the confinement: a `thread { }` that makes or reads either, directly or
+  through what it calls, doesn't compile (`thread.shared-global`;
+  `tests/errors/state_thread.ab`). Native code calling in from a thread the program didn't
+  start is outside that check. Abla has no cheap way to ask which thread is running, so there
+  is no run-time assertion.
+- The order a backend reads is the program's (below), and data from a wire takes defaults
+  (below).
+
 ## Order is deterministic
 
 Whatever a backend reads (a node's children, its style entries, raw entries, change records,
