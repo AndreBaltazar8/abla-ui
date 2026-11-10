@@ -232,11 +232,13 @@ the compiler). abla-ui builds with ablac 0.2.48 and newer; the tag syntax (`src/
 
 ## One grammar
 
-`src/dsl.ab` is `$one`'s parser with abla-ui's element table: the grammar (tags, attributes,
-prefixes, handlers, text content, `<If>` / `<Else>` / `<For>`) is the same code, and only the
-table of what each tag compiles to and the runtime names differ. It depends only on
-`abla/compiler/parser`, so the end state is one parser in abla-ui taking the element table as
-a parameter, with `$one` and `$ui` both registered from it.
+`src/grammar.ab` is the tag grammar: elements, attributes, handlers, text content, children,
+`<If>` / `<Else>` / `<For>`. It builds with ablac 0.2.48. A language is an element table
+(`TagLanguage`): its runtime helpers' prefix, whether bare numbers are ints, whether an
+attribute may repeat, its state prefixes, its textual tags, and the function that builds each
+element. `src/dsl.ab` is abla-ui's (`$ui`; its custom tags take named arguments, so it needs
+0.2.53); abla-one's `$one` is the other, positional, on 0.2.48, and its generated trees are
+held byte for byte to what its own parser produced (abla-one's `tests/dsl_trees.sh`).
 
 ## License
 

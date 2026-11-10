@@ -1,0 +1,312 @@
+import "abla/compiler/parser"
+import "abla/bytes"
+
+// The tag grammar `$ui` (src/dsl.ab) and abla-one's `$one` share: XML-like elements with
+// attributes, `on*={ statements }` handlers, text content with {expressions}, children,
+// {expressions} as children, and <If cond>…</If> <Else>…</Else> and <For each as>…</For>.
+// What an element compiles to is the language's (`TagLanguage`): its runtime helpers' prefix,
+// which tags hold text, and the function that builds every other element from its parsed
+// attributes, content and children. This file builds with ablac 0.2.48 (nothing here makes a
+// named argument); a language that does (abla-ui's custom tags) needs what its own table needs.
+
+/** An element's attributes in source order. `kinds`: string, int, bool, expr, action. `texts`
+ *  keeps a literal's text, so a value can be rebuilt as a string expression. */
+class TagAttributes(
+    val names: array<string>,
+    val kinds: array<string>,
+    val texts: array<string>,
+    val values: array<SyntaxExpression>
+)
+
+/**
+ * A tag language. `runtime` prefixes the helpers its generated code calls: `<runtime>Done()`
+ * ends a handler, `<runtime>Join(parts)` and `<runtime>String(x)` build text,
+ * `<runtime>Each(items, f)` a For. `numbers`: a bare numeric literal is an int (else a string).
+ * `unique`: an attribute given twice is an error. `states`: the state prefixes a property may
+ * take besides viewports (max760, min1500). `textual`: tags whose content is text. `build`:
+ * every element but If, Else and For, from the language, its tag, attributes, text content and
+ * children.
+ */
+class TagLanguage(
+    val runtime: string,
+    val numbers: bool,
+    val unique: bool,
+    val states: array<string>,
+    val textual: (string) -> bool,
+    val build: (TagLanguage, ParserCursor, string, var: TagAttributes, SyntaxExpression, array<SyntaxExpression>) -> SyntaxExpression
+)
+
+/** Is `name` a state or viewport prefix in `lang` (`pressed`, `max760`)? */
+compile fun tagIsState(lang: TagLanguage, name: string): bool {
+    for (s in lang.states) if (s == name) return true
+    tagIsViewport(name)
+}
+
+/** `max760` / `min1500`: a viewport condition. */
+compile fun tagIsViewport(name: string): bool {
+    if (name.size < 4 || !(name.startsWith("max") || name.startsWith("min"))) return false
+    var i = 3
+    while (i < name.size) {
+        if (name[i] < 48 || name[i] > 57) return false
+        i = i + 1
+    }
+    true
+}
+
+compile fun tagIndex(a: TagAttributes, name: string): int {
+    var i = 0
+    while (i < a.names.size) {
+        if (a.names[i] == name) return i
+        i = i + 1
+    }
+    -1
+}
+
+compile fun tagValue(var a: TagAttributes, name: string, fallback: SyntaxExpression): SyntaxExpression {
+    val i = tagIndex(a, name)
+    if (i < 0) fallback else a.values[i]
+}
+
+/** Attribute `index` as a string expression (style values, element attributes). */
+compile fun tagString(lang: TagLanguage, var a: TagAttributes, index: int): SyntaxExpression {
+    if (a.kinds[index] == "expr") return syntaxCall("${lang.runtime}String", [a.values[index]])
+    syntaxString(a.texts[index])
+}
+
+compile fun tagText(lang: TagLanguage, var a: TagAttributes, name: string, fallback: string): SyntaxExpression {
+    val i = tagIndex(a, name)
+    if (i < 0) syntaxString(fallback) else tagString(lang, a, i)
+}
+
+/** Splits `target:state:property` (each prefix optional) into its parts. */
+class TagProperty(val target: string, val state: string, val property: string)
+
+compile fun tagProperty(lang: TagLanguage, name: string): TagProperty {
+    var target = ""
+    var state = ""
+    var property = name
+    var start = 0
+    var j = 0
+    while (j <= name.size) {
+        if (j == name.size || name[j] == 58) {
+            val part = name.slice(start, j)
+            if (j == name.size) property = part
+            else if (tagIsState(lang, part)) state = part
+            else target = part
+            start = j + 1
+        }
+        j = j + 1
+    }
+    TagProperty(target, state, property)
+}
+
+compile fun tagAction(lang: TagLanguage, cursor: ParserCursor, name: string): SyntaxExpression {
+    val statements: array<SyntaxExpression> = []
+    var complete = false
+    while (!complete) {
+        parserRawSkipWhitespace(cursor)
+        if (parserRawAt(cursor, "}")) complete = true
+        else {
+            statements.append(parserParseAblaExpression(cursor))
+            parserRawSkipWhitespace(cursor)
+            if (!parserRawAt(cursor, "}") && !parserRawConsume(cursor, ";")) parserFail(cursor, "$name statements are separated by `;`")
+        }
+    }
+    // Handlers return void, whatever their last statement's value is.
+    statements.append(syntaxCall("${lang.runtime}Done", []))
+    syntaxInferredLambda(if (name == "onChange") ["value"] else [], syntaxBlock(statements), false)
+}
+
+compile fun tagName(cursor: ParserCursor): string {
+    var name = parserRawTakeName(cursor)
+    while (name != "" && parserRawConsume(cursor, ":")) name = "$name:${parserRawTakeName(cursor)}"
+    name
+}
+
+compile fun tagInt(text: string): int {
+    var negative = text.size > 0 && text[0] == 45
+    var n = 0
+    var i = if (negative) 1 else 0
+    while (i < text.size) {
+        n = n * 10 + text[i] - 48
+        i = i + 1
+    }
+    if (negative) -n else n
+}
+
+/** Reads attributes up to `>` (false) or `/>` (true: self-closing). */
+compile fun tagAttributes(lang: TagLanguage, cursor: ParserCursor, var a: TagAttributes): bool {
+    while (true) {
+        parserRawSkipWhitespace(cursor)
+        if (parserRawConsume(cursor, "/>")) return true
+        if (parserRawConsume(cursor, ">")) return false
+        val name = tagName(cursor)
+        if (name == "") {
+            parserFail(cursor, "expected an attribute")
+            return true
+        }
+        if (lang.unique && tagIndex(a, name) >= 0) parserFail(cursor, "the attribute $name is given twice")
+        parserRawSkipWhitespace(cursor)
+        if (!parserRawConsume(cursor, "=")) {
+            a.names.append(name)
+            a.kinds.append("bool")
+            a.texts.append("true")
+            a.values.append(syntaxBoolean(true))
+            continue
+        }
+        parserRawSkipWhitespace(cursor)
+        if (parserRawConsume(cursor, "\"")) {
+            val text = parserRawTakeUntil(cursor, "\"")
+            parserRawExpect(cursor, "\"")
+            a.names.append(name)
+            a.kinds.append("string")
+            a.texts.append(text)
+            a.values.append(syntaxString(text))
+        } else if (parserRawConsume(cursor, "{")) {
+            val action = name.size > 2 && name.slice(0, 2) == "on"
+            val value = if (action) tagAction(lang, cursor, name) else parserParseAblaExpression(cursor)
+            parserRawSkipWhitespace(cursor)
+            parserRawExpect(cursor, "}")
+            a.names.append(name)
+            a.kinds.append(if (action) "action" else "expr")
+            a.texts.append("")
+            a.values.append(value)
+        } else {
+            val text = parserRawTakeUntil(cursor, " \t\r\n/>")
+            var numeric = lang.numbers && text.size > 0
+            if (numeric) for (b in text) if (!((b >= 48 && b <= 57) || b == 45)) numeric = false
+            a.names.append(name)
+            a.kinds.append(if (numeric) "int" else "string")
+            a.texts.append(text)
+            a.values.append(if (numeric) syntaxInteger(tagInt(text)) else syntaxString(text))
+        }
+    }
+    true
+}
+
+/** Text content with {expressions}, whitespace collapsed as HTML collapses it. */
+compile fun tagTextContent(lang: TagLanguage, cursor: ParserCursor, tag: string): SyntaxExpression {
+    val parts: array<SyntaxExpression> = []
+    var pendingSpace = false
+    var any = false
+    while (true) {
+        if (parserRawEnd(cursor)) {
+            parserFail(cursor, "unterminated $tag")
+            return syntaxString("")
+        }
+        if (parserRawAt(cursor, "</")) return syntaxCall("${lang.runtime}Join", [syntaxArray(parts)])
+        if (parserRawAt(cursor, "<")) {
+            parserFail(cursor, "$tag holds text, not elements")
+            return syntaxString("")
+        }
+        if (parserRawConsume(cursor, "{")) {
+            if (pendingSpace && any) parts.append(syntaxString(" "))
+            pendingSpace = false
+            parts.append(syntaxCall("${lang.runtime}String", [parserParseAblaExpression(cursor)]))
+            parserRawSkipWhitespace(cursor)
+            parserRawExpect(cursor, "}")
+            any = true
+        } else {
+            val literal = parserRawTakeUntil(cursor, "<{")
+            var word = ""
+            for (b in literal) {
+                if (b == 32 || b == 9 || b == 10 || b == 13) {
+                    if (word != "") {
+                        parts.append(syntaxString(if (pendingSpace && any) " $word" else word))
+                        any = true
+                        word = ""
+                    }
+                    pendingSpace = true
+                } else {
+                    if (word == "" && pendingSpace && any) {
+                        word = " "
+                        pendingSpace = false
+                    } else if (word == "") pendingSpace = false
+                    word = tagAppendByte(word, b)
+                }
+            }
+            if (word != "") {
+                parts.append(syntaxString(word))
+                any = true
+            }
+        }
+    }
+    syntaxString("")
+}
+
+compile fun tagAppendByte(word: string, b: int): string = "$word${byteEncode(b)}"
+
+compile fun tagChildren(lang: TagLanguage, cursor: ParserCursor, tag: string): array<SyntaxExpression> {
+    val children: array<SyntaxExpression> = []
+    while (true) {
+        parserRawSkipWhitespace(cursor)
+        if (parserRawEnd(cursor)) {
+            parserFail(cursor, "unterminated $tag")
+            return children
+        }
+        if (parserRawAt(cursor, "</")) return children
+        // An <Else> belongs to the <If> before it (see tagElement).
+        if (parserRawAt(cursor, "<Else")) {
+            if (children.size == 0) parserFail(cursor, "<Else> must follow an <If>")
+            return children
+        }
+        if (parserRawAt(cursor, "<")) children.append(tagElement(lang, cursor))
+        else if (parserRawConsume(cursor, "{")) {
+            children.append(parserParseAblaExpression(cursor))
+            parserRawSkipWhitespace(cursor)
+            parserRawExpect(cursor, "}")
+        } else {
+            val text = parserRawTakeUntil(cursor, "<{")
+            var blank = true
+            for (b in text) if (!(b == 32 || b == 9 || b == 10 || b == 13)) blank = false
+            if (!blank) parserFail(cursor, "$tag holds elements; put text in <Text>")
+        }
+    }
+    children
+}
+
+compile fun tagClose(cursor: ParserCursor, tag: string): void {
+    parserRawExpect(cursor, "</")
+    val closing = parserRawTakeName(cursor)
+    if (closing != tag) parserFail(cursor, "</$closing> doesn't close <$tag>")
+    parserRawSkipWhitespace(cursor)
+    parserRawExpect(cursor, ">")
+    return
+}
+
+/** One element (the template, or a child): If, Else and For here, the rest the language's. */
+compile fun tagElement(lang: TagLanguage, cursor: ParserCursor): SyntaxExpression {
+    parserRawSkipWhitespace(cursor)
+    parserRawExpect(cursor, "<")
+    val tag = parserRawTakeName(cursor)
+    if (tag == "" || tag[0] < 65 || tag[0] > 90) parserFail(cursor, "element names are capitalised: <$tag>")
+    var a = TagAttributes([], [], [], [])
+    val selfClosing = tagAttributes(lang, cursor, a)
+    var content = syntaxString("")
+    var children: array<SyntaxExpression> = []
+    if (!selfClosing) {
+        if (lang.textual(tag)) content = tagTextContent(lang, cursor, tag)
+        else children = tagChildren(lang, cursor, tag)
+        tagClose(cursor, tag)
+    }
+    if (tag == "If") {
+        val chosen = syntaxCall("fragment", [syntaxArray(children)])
+        var otherwise = syntaxCall("none", [])
+        parserRawSkipWhitespace(cursor)
+        if (parserRawConsume(cursor, "<Else")) {
+            parserRawSkipWhitespace(cursor)
+            if (!parserRawConsume(cursor, "/>")) {
+                parserRawExpect(cursor, ">")
+                otherwise = syntaxCall("fragment", [syntaxArray(tagChildren(lang, cursor, "Else"))])
+                tagClose(cursor, "Else")
+            }
+        }
+        return syntaxIf(tagValue(a, "cond", syntaxBoolean(false)), chosen, otherwise)
+    }
+    if (tag == "For") {
+        val i = tagIndex(a, "as")
+        val name = if (i >= 0) a.texts[i] else "item"
+        return syntaxCall("${lang.runtime}Each", [tagValue(a, "each", syntaxArray([])), syntaxInferredLambda([name], syntaxCall("fragment", [syntaxArray(children)]), false)])
+    }
+    lang.build(lang, cursor, tag, a, content, children)
+}
