@@ -157,6 +157,9 @@ class FlexTree(
     var retW: f64, var retH: f64,
     // The root's box, for what floats over everything (a popover's panel).
     var rootW: f64, var rootH: f64,
+    // Layouts so far, and per node the one that last laid it out afresh (not from its cache):
+    // a caller keeping what it built from a subtree can tell whether any of it moved.
+    var passes: int, val freshAt: array<int>,
     // Scratch, a stack shared by nested computes: each box pushes its items and truncates on return.
     val sItem: array<int>, val sBase: array<f64>, val sSize: array<f64>, val sCross: array<f64>,
     val sLineEnd: array<int>, val sLineCross: array<f64>
@@ -179,6 +182,7 @@ fun flexTree(): FlexTree = FlexTree(
     [], [],
     0, 0.0, 0.0,
     0.0, 0.0,
+    0, [],
     [], [], [], [],
     [], []
 )
@@ -280,6 +284,7 @@ fun FlexTree.grow1(): int {
     this.textRoom.append(0.0)
     this.textW.append(0.0)
     this.textH.append(0.0)
+    this.freshAt.append(0)
     for (i in 0 until 6) {
         this.lay.append(0.0)
         this.meas.append(0.0)
@@ -564,6 +569,7 @@ fun FlexTree.needsLayout(root: int): bool = this.has(root, FLEX_F_DIRTY) || this
  * root fills the window). Clean subtrees asked what they were asked last are not visited.
  */
 fun FlexTree.layout(root: int, width: f64, height: f64, var measurer: FlexMeasure): void {
+    this.passes = this.passes + 1
     this.rootW = flexWhole(width)
     this.rootH = flexWhole(height)
     this.x[root] = 0.0
@@ -623,6 +629,7 @@ fun FlexTree.compute(n: int, availW: f64, availH: f64, fixedW: f64, fixedH: f64,
         return
     }
     this.computed = this.computed + 1
+    this.freshAt[n] = this.passes
     if (this.has(n, FLEX_F_CSS)) this.computeCss(n, availW, availH, fixedW, fixedH, measurer)
     else if (this.parent[n] >= 0 && this.has(this.parent[n], FLEX_F_CSS)) {
         // A CSS container's sizes hold a child's min / max, as CSS's do (abla-one's don't, for a container).

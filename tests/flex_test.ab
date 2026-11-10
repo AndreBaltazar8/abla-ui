@@ -722,6 +722,7 @@ fun caching(): void {
     check(!t.needsLayout(root), "nothing is dirty after a layout")
     t.layout(root, 1280.0, 720.0, m)
     check(t.computed == 0 && m.calls == 0, "an unchanged tree lays out nothing")
+    check(t.freshAt[root] < t.passes && t.freshAt[fps] < t.passes, "and no node says it was laid out afresh")
 
     // Change one label inside the window: the window is a boundary.
     m.texts.set(labels[3], "a longer label text that wraps!")
@@ -731,6 +732,8 @@ fun caching(): void {
     m.calls = 0
     t.layout(root, 1280.0, 720.0, m)
     check(t.computed <= 3 && m.calls <= 2, "only the changed label and its window are computed (${t.computed} nodes, ${m.calls} measures)")
+    check(t.freshAt[labels[3]] == t.passes && t.freshAt[window] == t.passes && t.freshAt[root] < t.passes && t.freshAt[labels[0]] < t.passes,
+        "freshAt names the nodes laid out afresh in this pass")
     check(near(t.h[labels[3]], 40.0) && near(t.y[labels[4]], 3.0 * 20.0 + 40.0), "the window's children moved for the taller label")
 
     // A change in the content-sized hud reaches the root; the window is answered from its cache.
