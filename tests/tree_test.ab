@@ -229,6 +229,18 @@ fun counting(): void {
     check(t.renders == 0 && t.layouts == 0 && t.resolves == 0 && t.flex.computed == 0, "an unchanged frame renders, lays out and resolves nothing")
     check(r.boxes == boxes && r.texts == texts, "and paints the same")
 
+    // A new window size with nothing else changed: the top-right column follows the edge.
+    t.input(e)
+    t.update(1000.0, 700.0)
+    clearRec(r)
+    t.paint(r)
+    val moved = said(r, "a")
+    check(moved >= 0 && near(r.textX[moved], 1000.0 - 10.0 - 8.0), "a resize lays out again: the top-right column follows the edge (${if (moved >= 0) r.textX[moved] else -1.0})")
+    clearRec(r)
+    frame(t, e, r)
+    val back = said(r, "a")
+    check(back >= 0 && near(r.textX[back], 800.0 - 10.0 - 8.0), "and back")
+
     // A State change re-renders only the component that read it.
     var changes: array<int> = []
     t.takeChanges(changes)

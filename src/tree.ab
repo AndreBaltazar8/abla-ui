@@ -185,6 +185,7 @@ class ViewTree(
     // What a node's own drawing depends on changed: its look, text, size, value, element.
     val stamp: array<int> = [], val drawnW: array<f64> = [], val drawnH: array<f64> = [], val textSeen: array<int> = [],
     var root: int = -1, var width: f64 = 0.0, var height: f64 = 0.0,
+    var laidWidth: f64 = -1.0, var laidHeight: f64 = -1.0,
     val changes: array<int> = [],
     val names: Map<string, int> = Map(),
     val rendered: array<int> = [], var renderPass: int = 0, val renderedIn: array<int> = [],
@@ -688,6 +689,13 @@ fun ViewTree.update(width: f64, height: f64): void {
         this.width = width
         // Breakpoint styles may now resolve differently.
         this.rebreak(this.root, before)
+    }
+    // A new window size moves everything anchored to its edges and centre: the root is laid out
+    // again even when nothing in the tree changed (else the old places stay until something does).
+    if (width != this.laidWidth || height != this.laidHeight) {
+        this.laidWidth = width
+        this.laidHeight = height
+        if (this.root >= 0) this.flex.markDirty(this.root)
     }
     this.height = height
     // A plain State or stateTouchAll changed: nothing knows who read it, so every component
