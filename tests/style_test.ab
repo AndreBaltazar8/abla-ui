@@ -74,6 +74,27 @@ fun tables(): void {
     check(lines.ellipsis && lines.ends[0] < 12 && lines.widths[0] <= 30.0, "one line too wide is ellipsized")
     textWrap("aaaa", regular, 30.0, 1, f, lines)
     check(!lines.ellipsis && lines.ends[0] == 4, "a line that fits isn't")
+
+    // CJK: unlisted code points past U+2000 are one em (10 px); breaks between characters
+    val ja = "日本語の文章です。"
+    textWrap(ja, regular, 35.0, 0, f, lines)
+    check(lines.starts.size == 3 && lines.widest <= 35.0, "Japanese breaks between characters (${lines.starts.size} lines)")
+    check(lines.ends[lines.ends.size - 1] == ja.size, "all of it kept")
+    // "。" may not start a line: with room for 8 the 。 stays with its word
+    textWrap(ja, regular, 80.0, 0, f, lines)
+    check(lines.starts.size == 2 && ja.slice(lines.starts[1], lines.starts[1] + 3) != "。", "kinsoku: no line starts with 。")
+    // "「" may not end a line
+    val quote = "あいう「えお」"
+    textWrap(quote, regular, 40.0, 0, f, lines)
+    var endsOpen = false
+    for (k in 0 until lines.starts.size) if (lines.ends[k] >= 3 && quote.slice(lines.ends[k] - 3, lines.ends[k]) == "「") endsOpen = true
+    check(!endsOpen, "kinsoku: no line ends with 「")
+    // Latin text keeps breaking at spaces only
+    textWrap("aaaa aaaa", regular, 30.0, 0, f, lines)
+    check(lines.starts.size == 2 && lines.ends[0] == 4, "Latin unchanged")
+    // Latin then CJK may break where they meet
+    textWrap("aaaa日本", regular, 25.0, 0, f, lines)
+    check(lines.starts.size == 2 && lines.ends[0] == 4, "break where Latin meets CJK")
     return
 }
 

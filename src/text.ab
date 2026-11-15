@@ -32,12 +32,14 @@ val TEXT_ELLIPSIS = "…"
 
 
 /**
- * Break `text` into lines no wider than `maxWidth`: at spaces where it can, inside a word
- * only where the word alone is wider, and at every '\n'. A line is measured whole (the span
- * from its start), so fonts that round a run's width wrap as they measure. With `maxLines`
- * > 0 the lines after it are dropped, `cut` is set and the last kept line ends in an
- * ellipsis that fits; one line wider than the room (maxLines 1) is ellipsized too. Trailing
- * spaces don't count toward a line's width.
+ * Break `text` into lines no wider than `maxWidth`: at spaces where it can, between characters of
+ * Chinese and Japanese text (and where it meets other text), inside a word only where the word
+ * alone is wider, and at every '\n'. CJK breaks keep closing punctuation and small kana off a
+ * line's start and opening brackets off its end (kinsoku). A line is measured whole (the span
+ * from its start), so fonts that round a run's width wrap as they measure. With `maxLines` > 0
+ * the lines after it are dropped, `cut` is set and the last kept line ends in an ellipsis that
+ * fits; one line wider than the room (maxLines 1) is ellipsized too. Trailing spaces don't count
+ * toward a line's width.
  */
 fun textWrap(text: string, face: int, maxWidth: f64, maxLines: int, var font: TextFont, var out: TextLines): void {
     out.starts.clear()
@@ -48,7 +50,11 @@ fun textWrap(text: string, face: int, maxWidth: f64, maxLines: int, var font: Te
     out.ellipsis = false
     var lineStart = 0
     var i = 0
-    var lastBreak = -1
+    // the last place the line may end: it ends at breakEnd and the next starts at breakNext
+    // (a space is dropped between them; a CJK break drops nothing)
+    var breakEnd = -1
+    var breakNext = -1
+    var prevCp = 0
     while (i <= text.size) {
         if (maxLines > 0 && out.starts.size >= maxLines) {
             out.cut = lineStart < text.size
@@ -59,23 +65,86 @@ fun textWrap(text: string, face: int, maxWidth: f64, maxLines: int, var font: Te
         if (b == 10) {
             textLine(out, text, face, lineStart, i, font)
             lineStart = i + 1
-            lastBreak = -1
+            breakEnd = -1
+            prevCp = 0
             i = i + 1
         } else {
+            val cp = textCodePointAt(text, i)
+            // a break opportunity before this character, between CJK characters (kinsoku-safe)
+            if (b != 32 && i > lineStart && prevCp != 32 && textCjkBreak(prevCp, cp)) {
+                breakEnd = i
+                breakNext = i
+            }
             val next = font.clusterEnd(text, i)
             if (b != 32 && i > lineStart && font.width(face, text, lineStart, next) > maxWidth + 0.001) {
-                val atSpace = lastBreak > lineStart
-                textLine(out, text, face, lineStart, if (atSpace) lastBreak else i, font)
-                lineStart = if (atSpace) lastBreak + 1 else i
-                lastBreak = -1
+                val atBreak = breakEnd > lineStart
+                textLine(out, text, face, lineStart, if (atBreak) breakEnd else i, font)
+                lineStart = if (atBreak) breakNext else i
+                breakEnd = -1
+                // the character before i still counts when the new line starts before it
+                if (lineStart >= i) prevCp = 0
             } else {
-                if (b == 32) lastBreak = i
+                if (b == 32) {
+                    breakEnd = i
+                    breakNext = i + 1
+                }
+                prevCp = cp
                 i = next
             }
         }
     }
     if (maxLines == 1 && out.starts.size == 1 && out.widths[0] > maxWidth + 0.001) textEllipsize(text, face, maxWidth, font, out)
     return
+}
+
+/** The code point at byte `i` of UTF-8 `text`. */
+fun textCodePointAt(text: string, i: int): int {
+    val b = text[i]
+    if (b < 128) return b
+    val n = if (b >= 240) 4 else if (b >= 224) 3 else if (b >= 192) 2 else 1
+    var cp = if (n == 4) b - 240 else if (n == 3) b - 224 else if (n == 2) b - 192 else b
+    var k = 1
+    while (k < n && i + k < text.size) {
+        cp = cp * 64 + (text[i + k] - 128)
+        k = k + 1
+    }
+    cp
+}
+
+/** Ideographs, kana and CJK punctuation: text that breaks between characters. */
+fun textIsCjk(cp: int): bool =
+    (cp >= 0x3000 && cp <= 0x30FF) || (cp >= 0x3400 && cp <= 0x4DBF) || (cp >= 0x4E00 && cp <= 0x9FFF) ||
+    (cp >= 0xF900 && cp <= 0xFAFF) || (cp >= 0xFF00 && cp <= 0xFFEF) || (cp >= 0x31F0 && cp <= 0x31FF) ||
+    (cp >= 0x20000 && cp <= 0x3FFFF)
+
+/** Characters a line must not start with: closing punctuation, small kana, the prolonged mark. */
+fun textNoStart(cp: int): bool {
+    if (cp == 41 || cp == 93 || cp == 125 || cp == 44 || cp == 46 || cp == 33 || cp == 63 || cp == 58 || cp == 59 || cp == 37) return true
+    if (cp == 0x3001 || cp == 0x3002 || cp == 0xFF0C || cp == 0xFF0E || cp == 0x30FB || cp == 0xFF1A || cp == 0xFF1B ||
+        cp == 0xFF1F || cp == 0xFF01 || cp == 0x30FC || cp == 0x3005 || cp == 0x309D || cp == 0x309E || cp == 0x30FD ||
+        cp == 0x30FE || cp == 0xFF05 || cp == 0x2026 || cp == 0x301C) return true
+    // closing brackets 」』）】〕〉》〙〛
+    if (cp == 0x300D || cp == 0x300F || cp == 0xFF09 || cp == 0x3011 || cp == 0x3015 || cp == 0x3009 || cp == 0x300B ||
+        cp == 0x3019 || cp == 0x301B || cp == 0xFF3D || cp == 0xFF5D) return true
+    // small kana
+    if (cp == 0x3041 || cp == 0x3043 || cp == 0x3045 || cp == 0x3047 || cp == 0x3049 || cp == 0x3063 || cp == 0x3083 ||
+        cp == 0x3085 || cp == 0x3087 || cp == 0x308E || cp == 0x3095 || cp == 0x3096) return true
+    if (cp == 0x30A1 || cp == 0x30A3 || cp == 0x30A5 || cp == 0x30A7 || cp == 0x30A9 || cp == 0x30C3 || cp == 0x30E3 ||
+        cp == 0x30E5 || cp == 0x30E7 || cp == 0x30EE || cp == 0x30F5 || cp == 0x30F6) return true
+    (cp >= 0x31F0 && cp <= 0x31FF)
+}
+
+/** Characters a line must not end with: opening brackets. */
+fun textNoEnd(cp: int): bool =
+    cp == 40 || cp == 91 || cp == 123 || cp == 0x300C || cp == 0x300E || cp == 0xFF08 || cp == 0x3010 || cp == 0x3014 ||
+    cp == 0x3008 || cp == 0x300A || cp == 0x3018 || cp == 0x301A || cp == 0xFF3B || cp == 0xFF5B
+
+/** May a line break between `prev` and `cp` (CJK rules; spaces are handled by the caller)? */
+fun textCjkBreak(prev: int, cp: int): bool {
+    if (prev == 0) return false
+    if (!textIsCjk(prev) && !textIsCjk(cp)) return false
+    if (textNoStart(cp) || textNoEnd(prev)) return false
+    true
 }
 
 /** End the last line with "…", dropping characters (and then spaces) until it fits. */
