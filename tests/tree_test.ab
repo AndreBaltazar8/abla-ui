@@ -366,6 +366,27 @@ fun settings(): void {
     frame(t, e, r)
     e.released = false
 
+    // A value below lo: nothing chosen yet, the track only (no fill, no knob) until one is picked.
+    clearRec(r)
+    frame(t, e, r)
+    val boxesSet = r.boxes
+    model.volume = -1.0
+    clearRec(r)
+    frame(t, e, r)
+    check(r.boxes == boxesSet - 2, "an unset slider draws no fill and no knob (${r.boxes} vs $boxesSet)")
+    e.x = t.ax[volume] + t.flex.w[volume] * 0.5
+    e.pressed = true
+    e.down = true
+    frame(t, e, r)
+    e.pressed = false
+    e.down = false
+    e.released = true
+    frame(t, e, r)
+    e.released = false
+    check(near(model.volume, 0.5), "pressing an unset slider picks a value")
+    model.volume = 0.25
+    frame(t, e, r)
+
     // Toggle by click.
     val shadows = t.named("shadows")
     e.x = t.ax[shadows] + 5.0

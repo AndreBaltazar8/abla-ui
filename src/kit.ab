@@ -70,7 +70,8 @@ fun toggle(t: string, on: bool, s: Style, f: (bool) -> void): El =
         text(t, style().grow(1.0))
     ]).pressable(kitToggled(f, on)).selectedIf(on)
 
-/** A horizontal slider over [lo, hi]; `f` gets each new value while it is dragged or stepped. */
+/** A horizontal slider over [lo, hi]; `f` gets each new value while it is dragged or stepped. A value
+ *  below `lo` shows nothing chosen yet (no knob) until one is picked. */
 fun slider(value: f64, lo: f64, hi: f64, s: Style, f: (f64) -> void): El =
     box(style().height(26.0).with(s), []).slider(value, lo, hi, 0.0, f)
 

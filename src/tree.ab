@@ -1043,8 +1043,11 @@ fun ViewTree.paintText(n: int, x: f64, y: f64, w: f64, a: f64, var painter: View
     return
 }
 
-/** A slider draws its track, the filled part and the knob from the theme. */
+/** A slider draws its track, the filled part and the knob from the theme. A value below `lo` means
+ *  nothing is chosen yet (a question with no preset answer): the track alone, no fill and no knob,
+ *  until the pointer or a key picks a value. */
 fun ViewTree.paintSlider(n: int, x: f64, y: f64, w: f64, h: f64, states: int, a: f64, var painter: ViewPainter): void {
+    val unset = this.value[n] < this.lo[n]
     val range = this.hi[n] - this.lo[n]
     val t = if (range > 0.0) fmax(0.0, fmin(1.0, (this.value[n] - this.lo[n]) / range)) else 0.0
     val knob = h * 0.8
@@ -1053,6 +1056,7 @@ fun ViewTree.paintSlider(n: int, x: f64, y: f64, w: f64, h: f64, states: int, a:
     val l = look()
     lookResolve(this.theme.track, states, this.width, 0, 0.0, l)
     painter.box(x, ty, w, trackH, l, a)
+    if (unset) return
     if (t > 0.0) {
         lookResolve(this.theme.trackFill, states, this.width, 0, 0.0, l)
         painter.box(x, ty, w * t, trackH, l, a)
