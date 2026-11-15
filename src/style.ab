@@ -85,7 +85,9 @@ val P_SOLID = 61        // 1: takes the pointer (a panel), so clicks don't reach
 val P_ENTER = 62        // ms: a new node fades in over this long (0: it appears at once)
 val P_ENTER_RISE = 63   // px: and rises this far into place while it does
 val P_TRANSITION = 64   // ms: a change of states (hover, pressed, selected…) eases into the new look
-val P_COUNT = 65
+val P_EXIT = 65         // ms: an anchored node a render drops fades out over this long before it goes
+val P_EXIT_SINK = 66    // px: and sinks this far while it does
+val P_COUNT = 67
 val P_RAW = 100         // a raw (name, value) pair for one backend, e.g. "css:…"; its value indexes `raw`
 
 val SIZE_CONTENT = -1.0
@@ -283,6 +285,10 @@ fun Style.enter(ms: f64, rise: f64): Style = this.set(P_ENTER, ms).set(P_ENTER_R
  *  alphas, border, glow, shadow and opacity ease into the new look over `ms` instead of
  *  switching at once. Nodes without it switch at once, as before. */
 fun Style.transition(ms: f64): Style = this.set(P_TRANSITION, ms)
+/** An anchored node (a window, a toast) that a render drops fades out over `ms`, sinking
+ *  `sink` px, before it is freed; it takes no input meanwhile, and its name is free at once
+ *  (rendering it again makes a new one). A node in the flow, or one without it, goes at once. */
+fun Style.exit(ms: f64, sink: f64): Style = this.set(P_EXIT, ms).set(P_EXIT_SINK, sink)
 fun Style.clip(): Style = this.set(P_CLIP, 1.0)
 fun Style.color(rgb: int, alpha: f64): Style = this.set(P_COLOR, f64FromInt(rgb)).set(P_COLOR_A, alpha)
 fun Style.textAlign(v: int): Style = this.set(P_TEXT_ALIGN, f64FromInt(v))

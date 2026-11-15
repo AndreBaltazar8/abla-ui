@@ -219,6 +219,9 @@ class ViewTree(
     val born: array<f64> = [],         // `now` when the node was made (an `enter` style eases in from it)
     val tweenFrom: array<Look> = [], val tweenAt: array<f64> = [], // a `transition`: the look it eases from, since when (-1: none)
     var tweenLook: Look = look(),      // scratch: the eased look being painted
+    val leaving: array<f64> = [],      // `now` when a dropped node with an `exit` began fading (-1: not leaving)
+    val leavers: array<int> = [],      // the nodes fading out, freed once their time is up
+    var ghostDepth: int = 0,           // painting inside a leaving node: it takes no input
     // What a node's own drawing depends on changed: its look, text, size, value, element.
     val stamp: array<int> = [], val drawnW: array<f64> = [], val drawnH: array<f64> = [], val textSeen: array<int> = [],
     var root: int = -1, var width: f64 = 0.0, var height: f64 = 0.0,
@@ -297,6 +300,7 @@ fun ViewTree.newNode(parent: int): int {
         this.born.append(0.0)
         this.tweenFrom.append(look())
         this.tweenAt.append(-1.0)
+        this.leaving.append(-1.0)
         this.stamp.append(0)
         this.drawnW.append(-1.0)
         this.drawnH.append(-1.0)
@@ -335,6 +339,7 @@ fun ViewTree.newNode(parent: int): int {
     this.alpha[n] = 1.0
     this.born[n] = this.now
     this.tweenAt[n] = -1.0
+    this.leaving[n] = -1.0
     this.stamp[n] = this.stamp[n] + 1
     this.drawnW[n] = -1.0
     this.renderedIn[n] = -1
@@ -492,13 +497,16 @@ fun ViewTree.renderComponent(n: int): void {
         this.reconcileChildren(n, [out])
         return
     }
-    if (out.kind == EL_FRAGMENT || out.kind == EL_NONE) {
+    // An element with an exit (Style.exit) is held in a layer too, so dropping it later (none)
+    // removes a child, which can fade out, rather than emptying this node.
+    val exits = out.kind != EL_FRAGMENT && out.kind != EL_NONE && out.style.get(P_EXIT, 0, this.width, 0.0) > 0.0
+    if (out.kind == EL_FRAGMENT || out.kind == EL_NONE || exits) {
         // Several elements, or none (an <If> at the top): a layer filling its parent, so what
         // it holds anchors where the component is.
         val layerKey = this.key[n]
         this.setProps(n, box(style().fillBoth().stack(), []))
         this.key[n] = layerKey
-        this.reconcileChildren(n, if (out.kind == EL_FRAGMENT) elVisible(out.children) else array<El>())
+        this.reconcileChildren(n, if (out.kind == EL_FRAGMENT) elVisible(out.children) else if (exits) [out] else array<El>())
         return
     }
     // The node keeps the component's key (its identity among its siblings), not its element's.
@@ -663,7 +671,7 @@ fun ViewTree.reconcileChildren(n: int, els: array<El>): void {
     val old: array<int> = []
     var c = this.flex.first[n]
     while (c >= 0) {
-        old.append(c)
+        if (this.leaving[c] < 0.0) old.append(c) // a leaving node is gone as far as rendering goes
         c = this.flex.next[c]
     }
     val oldId: array<string> = []
@@ -690,13 +698,19 @@ fun ViewTree.reconcileChildren(n: int, els: array<El>): void {
     // Remove what isn't kept.
     for (j in 0 until old.size) {
         if (!taken[j]) {
-            this.forget(old[j])
-            this.flex.remove(old[j])
+            val o = old[j]
+            this.forget(o)
+            // An anchored node with an exit stays painting (no input) until its time is up.
+            if (this.flex.has(o, FLEX_F_ABSOLUTE) && this.style[o].get(P_EXIT, 0, this.width, 0.0) > 0.0) {
+                this.leaving[o] = this.now
+                this.leavers.append(o)
+            } else this.flex.remove(o)
         }
     }
     // Put kept and new nodes in order, then reconcile each.
     var expect = this.flex.first[n]
     for (i in 0 until els.size) {
+        while (expect >= 0 && this.leaving[expect] >= 0.0) expect = this.flex.next[expect]
         var node = placed[i]
         if (node < 0) {
             node = this.newNode(-1)
@@ -747,6 +761,17 @@ fun ViewTree.sameKind(node: int, el: El): bool =
  * before children, each once), then lay out what changed in a `width` × `height` viewport.
  */
 fun ViewTree.update(width: f64, height: f64): void {
+    // Leaving nodes whose exit is over go now.
+    var li = 0
+    while (li < this.leavers.size) {
+        val g = this.leavers[li]
+        if (this.leaving[g] < 0.0 || (this.now - this.leaving[g]) * 1000.0 >= this.style[g].get(P_EXIT, 0, this.width, 0.0)) {
+            this.leaving[g] = -1.0
+            if (this.flex.has(g, FLEX_F_LIVE)) this.flex.remove(g) // (forget recorded its removal when it began leaving)
+            this.leavers[li] = this.leavers[this.leavers.size - 1]
+            this.leavers.truncate(this.leavers.size - 1)
+        } else li = li + 1
+    }
     if (width != this.width) {
         val before = this.width
         this.width = width
@@ -985,6 +1010,14 @@ fun ViewTree.paintNode(n: int, ox: f64, oy: f64, inherited: int, ink: int, inkA:
             rise = this.style[n].get(P_ENTER_RISE, 0, this.width, 0.0) * (1.0 - entering)
         }
     }
+    // Leaving (Style.exit): fading out and sinking until update frees it.
+    if (this.leaving[n] >= 0.0) {
+        val ms = this.style[n].get(P_EXIT, 0, this.width, 0.0)
+        val t = if (ms > 0.0) fmin(1.0, fmax(0.0, (this.now - this.leaving[n]) * 1000.0 / ms)) else 1.0
+        val eased = t * t
+        entering = entering * (1.0 - eased)
+        rise = rise + this.style[n].get(P_EXIT_SINK, 0, this.width, 0.0) * eased
+    }
     val x = ox + this.flex.x[n] + this.tx[n]
     val y = oy + this.flex.y[n] + this.ty[n] + rise
     val w = this.flex.w[n]
@@ -1035,7 +1068,8 @@ fun ViewTree.paintNode(n: int, ox: f64, oy: f64, inherited: int, ink: int, inkA:
     var nr = cr
     var nb = cb
     val scrolls = this.flex.has(n, FLEX_F_SCROLL_X) || this.flex.has(n, FLEX_F_SCROLL_Y)
-    if (role != ROLE_NONE || solid || scrolls || this.tooltip[n] != "") {
+    val ghost = this.ghostDepth > 0 || this.leaving[n] >= 0.0
+    if (!ghost && (role != ROLE_NONE || solid || scrolls || this.tooltip[n] != "")) {
         this.hitNode.append(n)
         this.hitRect.append(fmax(x, cl))
         this.hitRect.append(fmax(y, ct))
@@ -1051,7 +1085,7 @@ fun ViewTree.paintNode(n: int, ox: f64, oy: f64, inherited: int, ink: int, inkA:
         this.fieldClip.append(cr)
         this.fieldClip.append(cb)
     }
-    if (scrolls) this.scrollers.append(n)
+    if (scrolls && !ghost) this.scrollers.append(n)
     // Children, clipped if it clips or scrolls.
     if (this.flex.first[n] < 0) return
     val clips = clipsLook || scrolls
@@ -1063,6 +1097,7 @@ fun ViewTree.paintNode(n: int, ox: f64, oy: f64, inherited: int, ink: int, inkA:
         painter.clipPush(x, y, w, h)
     }
     val childStates = if (role != ROLE_NONE) states else inherited
+    if (this.leaving[n] >= 0.0) this.ghostDepth = this.ghostDepth + 1
     var c = this.flex.first[n]
     val cx = x - this.sx[n]
     val cy = y - this.sy[n]
@@ -1070,6 +1105,7 @@ fun ViewTree.paintNode(n: int, ox: f64, oy: f64, inherited: int, ink: int, inkA:
         this.paintNode(c, cx, cy, childStates, color, colorA, a, nl, nt, nr, nb, painter)
         c = this.flex.next[c]
     }
+    if (this.leaving[n] >= 0.0) this.ghostDepth = this.ghostDepth - 1
     if (clips) painter.clipPop()
     if (scrolls) this.paintScrollbar(n, x, y, w, h, a, painter)
     return
