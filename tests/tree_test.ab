@@ -755,6 +755,56 @@ fun plain(): void {
     return
 }
 
+class FieldForm(var email: string by Tracked(""), var sent: int by Tracked(0))
+val fieldForm = FieldForm()
+var fieldFormRenders = 0
+
+class FieldWindow() : Component {
+    fun render(): El {
+        fieldFormRenders = fieldFormRenders + 1
+        return column(style().width(300.0).padding(10.0), [
+            textField(fieldForm.email, "Email", FIELD_SIGN_IN, 254, style(), { t -> fieldForm.email = t }).onSubmit({ -> fieldForm.sent = fieldForm.sent + 1 }).named("email"),
+            textField("", "Password", FIELD_PASSWORD, 256, style(), { t -> return }).disabledIf(fieldForm.sent > 1)
+        ])
+    }
+}
+
+fun makeFieldWindow(): Component = FieldWindow()
+
+fun fieldsWork(): void {
+    val t = viewTree(themeDefault(), Mono())
+    t.mount(comp("form", makeFieldWindow))
+    t.update(800.0, 600.0)
+    val r = Recorder(0, 0, 0, [], [], [], [])
+    t.paint(r)
+    check(t.fields.size == 2 && t.fieldClip.size == 8, "the paint lists the fields it drew (${t.fields.size})")
+    val email = t.named("email")
+    check(t.fields[0] == email && t.role[email] == ROLE_FIELD, "in drawing order, as fields")
+    check(t.fieldHint[email] == "Email" && t.fieldText[email] == "" && f64ToInt(t.step[email]) == FIELD_SIGN_IN && f64ToInt(t.value[email]) == 254, "with their hint, text, kind and length")
+    check(near(t.flex.h[email], 40.0) && near(t.flex.w[email], 280.0), "laid out in the theme's field style (${t.flex.w[email]} x ${t.flex.h[email]})")
+    check(r.boxes >= 2, "the tree paints their boxes")
+    t.fieldEdited(email, "po@example.com")
+    check(fieldForm.email == "po@example.com" && t.fieldText[email] == "po@example.com", "an edit reaches the handler and the node at once")
+    val before = fieldFormRenders
+    t.update(800.0, 600.0)
+    check(fieldFormRenders == before + 1 && t.fieldText[email] == "po@example.com", "and renders the form with the new text")
+    t.fieldSubmitted(email)
+    check(fieldForm.sent == 1, "Enter calls onSubmit")
+    // A pointer over a field is over the UI, but a field isn't a pressable: no hot, no tree focus.
+    val e = viewInput()
+    e.x = t.ax[email] + 5.0
+    e.y = t.ay[email] + 5.0
+    e.pressed = true
+    e.down = true
+    t.input(e)
+    check(t.wantsPointer() && t.hot < 0 && t.focused < 0, "a field takes the pointer, not the tree's focus")
+    fieldForm.sent = 2
+    t.update(800.0, 600.0)
+    t.paint(r)
+    check(t.fields.size == 1, "a disabled field isn't listed")
+    return
+}
+
 fun main: int {
     counting()
     settings()
@@ -763,6 +813,7 @@ fun main: int {
     adversarial()
     scopes()
     plain()
+    fieldsWork()
     println("tree: $passed passed, $failed failed")
     if (failed == 0) 0 else 1
 }

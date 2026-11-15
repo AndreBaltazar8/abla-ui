@@ -39,6 +39,20 @@ val ROLE_NONE = 0
 val ROLE_PRESS = 1   // a button, toggle, tab or list row: onPress on a click, Enter, Space or A
 val ROLE_SLIDER = 2  // onValue while dragged or stepped with Left / Right
 val ROLE_WINDOW = 3  // onPress when Escape (or B) closes it as the topmost window
+val ROLE_FIELD = 4   // a one-line text field: the platform edits it (onText), Enter calls onPress
+
+// A field's kind (`El.step`): the keyboard, autocomplete and masking a platform gives it. The
+// numbers are abla-forge's TEXT_PROXY_* (the web page's native input under the field).
+val FIELD_TEXT = 0
+val FIELD_PASSWORD = 1
+val FIELD_EMAIL = 2
+val FIELD_NUMBER = 3
+val FIELD_SEARCH = 4
+val FIELD_USERNAME = 5
+val FIELD_CHAT = 6      // no autocomplete; the keyboard's enter key says "send"
+val FIELD_CODE = 7      // a one-time code
+val FIELD_SIGN_IN = 8   // a sign-in email: filled as the account's user name
+val FIELD_NEW_PASSWORD = 9 // a password being chosen: the browser may suggest a strong one
 
 // Change records (op, node, extra).
 val CH_ADD = 1      // extra: the parent
@@ -59,6 +73,10 @@ fun elNoValue(v: f64): void {
     return
 }
 
+fun elNoText(t: string): void {
+    return
+}
+
 /** A description of a node, made by render() and compared with what is there. */
 class El(
     val kind: int, val key: string, val style: Style, val text: string, val children: array<El>,
@@ -66,7 +84,9 @@ class El(
     val selected: bool, val disabled: bool,
     val onPress: () -> void, val onValue: (f64) -> void,
     val tooltip: string, val image: int, val type: string,
-    val make: (() -> Component)?, val name: string
+    val make: (() -> Component)?, val name: string,
+    // A field's edits (its text is `text`, its placeholder `hint`, max bytes `value`, kind `step`).
+    val onText: (string) -> void = elNoText, val hint: string = ""
 )
 
 fun elMake(kind: int, s: Style, text: string, children: array<El>): El =
@@ -102,20 +122,34 @@ fun comp(type: string, make: () -> Component): El =
     El(EL_COMPONENT, type, style(), "", [], ROLE_NONE, 0.0, 0.0, 1.0, 0.0, false, false, elNothing, elNoValue, "", 0, type, make, "")
 
 // Modifiers: each returns a new element.
-fun El.keyed(k: string): El = El(this.kind, k, this.style, this.text, this.children, this.role, this.value, this.lo, this.hi, this.step, this.selected, this.disabled, this.onPress, this.onValue, this.tooltip, this.image, this.type, this.make, this.name)
-fun El.styled(s: Style): El = El(this.kind, this.key, this.style.with(s), this.text, this.children, this.role, this.value, this.lo, this.hi, this.step, this.selected, this.disabled, this.onPress, this.onValue, this.tooltip, this.image, this.type, this.make, this.name)
+fun El.keyed(k: string): El = El(this.kind, k, this.style, this.text, this.children, this.role, this.value, this.lo, this.hi, this.step, this.selected, this.disabled, this.onPress, this.onValue, this.tooltip, this.image, this.type, this.make, this.name, this.onText, this.hint)
+fun El.styled(s: Style): El = El(this.kind, this.key, this.style.with(s), this.text, this.children, this.role, this.value, this.lo, this.hi, this.step, this.selected, this.disabled, this.onPress, this.onValue, this.tooltip, this.image, this.type, this.make, this.name, this.onText, this.hint)
 /** Pressable: a click (released over it), Enter, Space or A while focused calls `f`. */
-fun El.pressable(f: () -> void): El = El(this.kind, this.key, this.style, this.text, this.children, ROLE_PRESS, this.value, this.lo, this.hi, this.step, this.selected, this.disabled, f, this.onValue, this.tooltip, this.image, this.type, this.make, this.name)
+fun El.pressable(f: () -> void): El = El(this.kind, this.key, this.style, this.text, this.children, ROLE_PRESS, this.value, this.lo, this.hi, this.step, this.selected, this.disabled, f, this.onValue, this.tooltip, this.image, this.type, this.make, this.name, this.onText, this.hint)
 /** A slider over [lo, hi] at `value`; `f` gets each new value (`step` 0: a twentieth of the range per key). */
-fun El.slider(value: f64, lo: f64, hi: f64, step: f64, f: (f64) -> void): El = El(this.kind, this.key, this.style, this.text, this.children, ROLE_SLIDER, value, lo, hi, step, this.selected, this.disabled, this.onPress, f, this.tooltip, this.image, this.type, this.make, this.name)
+fun El.slider(value: f64, lo: f64, hi: f64, step: f64, f: (f64) -> void): El = El(this.kind, this.key, this.style, this.text, this.children, ROLE_SLIDER, value, lo, hi, step, this.selected, this.disabled, this.onPress, f, this.tooltip, this.image, this.type, this.make, this.name, this.onText, this.hint)
 /** A window: Escape (or B) closes it when it is the topmost, calling `f`. */
-fun El.closable(f: () -> void): El = El(this.kind, this.key, this.style, this.text, this.children, ROLE_WINDOW, this.value, this.lo, this.hi, this.step, this.selected, this.disabled, f, this.onValue, this.tooltip, this.image, this.type, this.make, this.name)
-fun El.selectedIf(on: bool): El = El(this.kind, this.key, this.style, this.text, this.children, this.role, this.value, this.lo, this.hi, this.step, on, this.disabled, this.onPress, this.onValue, this.tooltip, this.image, this.type, this.make, this.name)
-fun El.disabledIf(on: bool): El = El(this.kind, this.key, this.style, this.text, this.children, this.role, this.value, this.lo, this.hi, this.step, this.selected, on, this.onPress, this.onValue, this.tooltip, this.image, this.type, this.make, this.name)
+fun El.closable(f: () -> void): El = El(this.kind, this.key, this.style, this.text, this.children, ROLE_WINDOW, this.value, this.lo, this.hi, this.step, this.selected, this.disabled, f, this.onValue, this.tooltip, this.image, this.type, this.make, this.name, this.onText, this.hint)
+fun El.selectedIf(on: bool): El = El(this.kind, this.key, this.style, this.text, this.children, this.role, this.value, this.lo, this.hi, this.step, on, this.disabled, this.onPress, this.onValue, this.tooltip, this.image, this.type, this.make, this.name, this.onText, this.hint)
+fun El.disabledIf(on: bool): El = El(this.kind, this.key, this.style, this.text, this.children, this.role, this.value, this.lo, this.hi, this.step, this.selected, on, this.onPress, this.onValue, this.tooltip, this.image, this.type, this.make, this.name, this.onText, this.hint)
 /** Show `t` by the pointer once it has rested on this element half a second. */
-fun El.tip(t: string): El = El(this.kind, this.key, this.style, this.text, this.children, this.role, this.value, this.lo, this.hi, this.step, this.selected, this.disabled, this.onPress, this.onValue, t, this.image, this.type, this.make, this.name)
+fun El.tip(t: string): El = El(this.kind, this.key, this.style, this.text, this.children, this.role, this.value, this.lo, this.hi, this.step, this.selected, this.disabled, this.onPress, this.onValue, t, this.image, this.type, this.make, this.name, this.onText, this.hint)
 /** Name the node this element becomes, to reach it later with `ViewTree.named` (setText, setTranslate…). */
-fun El.named(n: string): El = El(this.kind, this.key, this.style, this.text, this.children, this.role, this.value, this.lo, this.hi, this.step, this.selected, this.disabled, this.onPress, this.onValue, this.tooltip, this.image, this.type, this.make, n)
+fun El.named(n: string): El = El(this.kind, this.key, this.style, this.text, this.children, this.role, this.value, this.lo, this.hi, this.step, this.selected, this.disabled, this.onPress, this.onValue, this.tooltip, this.image, this.type, this.make, n, this.onText, this.hint)
+
+/** What Enter in a field does: `f` runs (the role stays a field). */
+fun El.onSubmit(f: () -> void): El = El(this.kind, this.key, this.style, this.text, this.children, this.role, this.value, this.lo, this.hi, this.step, this.selected, this.disabled, f, this.onValue, this.tooltip, this.image, this.type, this.make, this.name, this.onText, this.hint)
+
+/**
+ * A one-line text field holding `value`, `hint` showing while it is empty, at most `maxLength`
+ * bytes, of `kind` (FIELD_*). The tree lays it out and paints its box (a `focus:` style shows
+ * while it has focus); the platform edits and draws the text, caret and selection in it, and
+ * calls `onText` with each edit (`fields` lists the fields drawn, `fieldEdited` reports one).
+ * Enter in it calls the handler given with `onSubmit`.
+ */
+fun field(value: string, hint: string, kind: int, maxLength: int, s: Style, onText: (string) -> void): El =
+    El(EL_BOX, "", s, value, [], ROLE_FIELD, f64FromInt(maxLength), 0.0, 1.0, f64FromInt(kind), false, false,
+        elNothing, elNoValue, "", 0, "", null, "", onText, hint)
 
 /** Draws the tree. Positions are absolute logical px; colours 0xRRGGBB with an alpha. */
 interface ViewPainter {
@@ -202,7 +236,11 @@ class ViewTree(
     // A component node's State scope (stateNewScope: unique across trees and never reused), -1
     // for none; and back from a scope to its node.
     val scope: array<int> = [], val scopeNode: Map<int, int> = Map(),
-    var changesTaken: bool = false     // a renderer takes the change records (takeChanges)
+    var changesTaken: bool = false,    // a renderer takes the change records (takeChanges)
+    // Fields (ROLE_FIELD): their text, placeholder and edit handler; and the fields the last paint
+    // drew, each with its clip (left, top, right, bottom), for the platform to edit and draw in.
+    val fieldText: array<string> = [], val fieldHint: array<string> = [], val edit: array<(string) -> void> = [],
+    val fields: array<int> = [], val fieldClip: array<f64> = []
 )
 
 fun viewTree(theme: Theme, font: TextFont): ViewTree {
@@ -259,6 +297,9 @@ fun ViewTree.newNode(parent: int): int {
         this.renderedIn.append(-1)
         this.nameOf.append("")
         this.scope.append(-1)
+        this.fieldText.append("")
+        this.fieldHint.append("")
+        this.edit.append(elNoText)
         this.texts.text.append("")
         this.texts.face.append(0)
         this.texts.lineH.append(0.0)
@@ -290,6 +331,9 @@ fun ViewTree.newNode(parent: int): int {
     this.renderedIn[n] = -1
     this.nameOf[n] = ""
     this.scope[n] = -1
+    this.fieldText[n] = ""
+    this.fieldHint[n] = ""
+    this.edit[n] = elNoText
     this.texts.text[n] = ""
     this.texts.maxLines[n] = 0
     this.texts.noWrap[n] = false
@@ -496,9 +540,15 @@ fun ViewTree.setProps(n: int, el: El): void {
         this.image[n] = el.image
         changed = true
     }
+    if (el.role == ROLE_FIELD && (this.fieldText[n] != el.text || this.fieldHint[n] != el.hint)) {
+        this.fieldText[n] = el.text
+        this.fieldHint[n] = el.hint
+        changed = true
+    }
     this.key[n] = el.key
     this.press[n] = el.onPress
     this.change[n] = el.onValue
+    this.edit[n] = el.onText
     if (el.name != "" && this.nameOf[n] != el.name) {
         this.names.set(el.name, n)
         this.nameOf[n] = el.name
@@ -843,6 +893,22 @@ fun ViewTree.resolveLook(n: int, states: int, ink: int, inkA: f64): void {
     return
 }
 
+/** The platform edited field `n` to `t`: the tree keeps it (so the next frame draws it even before
+ *  a render) and calls the field's onText, whose state change renders it for good. */
+fun ViewTree.fieldEdited(n: int, t: string): void {
+    if (n < 0 || n >= this.fieldText.size || this.role[n] != ROLE_FIELD) return
+    this.fieldText[n] = t
+    this.edit[n](t)
+    return
+}
+
+/** Enter in field `n`: its onSubmit handler. */
+fun ViewTree.fieldSubmitted(n: int): void {
+    if (n < 0 || n >= this.press.size || this.role[n] != ROLE_FIELD) return
+    this.press[n]()
+    return
+}
+
 /** Paint the tree. Hit regions, focus order and windows are collected for the next input. */
 fun ViewTree.paint(var painter: ViewPainter): void {
     this.hitNode.clear()
@@ -850,6 +916,8 @@ fun ViewTree.paint(var painter: ViewPainter): void {
     this.focusOrder.clear()
     this.windows.clear()
     this.scrollers.clear()
+    this.fields.clear()
+    this.fieldClip.clear()
     this.paintNode(this.root, 0.0, 0.0, 0, this.theme.text, this.theme.textA, 1.0, -1.0e9, -1.0e9, 1.0e9, 1.0e9, painter)
     if (this.focused >= 0) {
         val f = this.focused
@@ -917,6 +985,13 @@ fun ViewTree.paintNode(n: int, ox: f64, oy: f64, inherited: int, ink: int, inkA:
     }
     if ((role == ROLE_PRESS || role == ROLE_SLIDER) && (this.own[n] & ON_DISABLED) == 0) this.focusOrder.append(n)
     if (role == ROLE_WINDOW) this.windows.append(n)
+    if (role == ROLE_FIELD && (this.own[n] & ON_DISABLED) == 0) {
+        this.fields.append(n)
+        this.fieldClip.append(cl)
+        this.fieldClip.append(ct)
+        this.fieldClip.append(cr)
+        this.fieldClip.append(cb)
+    }
     if (scrolls) this.scrollers.append(n)
     // Children, clipped if it clips or scrolls.
     if (this.flex.first[n] < 0) return

@@ -51,6 +51,10 @@ fun caption(t: string, s: Style): El = text(t, kitTheme.caption.with(s))
 /** A panel or card: it takes the pointer where it is drawn. */
 fun panel(s: Style, children: array<El>): El = column(kitTheme.panel.with(s), children)
 
+/** A text field in the theme's field style (see `field`): `f` gets each edit. */
+fun textField(value: string, hint: string, kind: int, maxLength: int, s: Style, f: (string) -> void): El =
+    field(value, hint, kind, maxLength, kitTheme.field.with(s), f)
+
 /** A push button; `f` runs when it is clicked or activated. */
 fun button(t: string, s: Style, f: () -> void): El =
     row(kitTheme.button.with(s), [text(t, style().noWrap())]).pressable(f)

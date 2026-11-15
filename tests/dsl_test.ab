@@ -44,9 +44,16 @@ class Demo(
     var shadows: bool by Tracked(false),
     var volume: f64 by Tracked(0.5),
     var tab: int by Tracked(0),
-    var log: string by Tracked("")
+    var log: string by Tracked(""),
+    var email: string by Tracked("po@")
 )
 val demo = Demo()
+
+fun form(): El = $ui
+    <Column gap=8>
+      <Field value={demo.email} hint="Email" kind="sign-in" max=254 onChange={ demo.email = value } onSubmit={ note("submit") } name="email"/>
+      <Field value="" hint="Password" kind="new-password" focused:background="#000000"/>
+    </Column>
 
 fun people(): array<Person> = [Person("Sofia Costa", "u1"), Person("André Silva", "u2")]
 
@@ -185,6 +192,17 @@ fun main: int {
     check(root.children[7].children[0].text == "André Silva", "the loop variable")
     check(root.children[8].text == "Olá, Sofia!", "a program's own component")
     check(root.children.size == 10, "fragments flattened (${root.children.size})")
+
+    val f = form()
+    val email = f.children[0]
+    check(email.role == ROLE_FIELD && email.text == "po@" && email.hint == "Email" && email.name == "email", "Field with its value, hint and name")
+    check(f64ToInt(email.step) == FIELD_SIGN_IN && f64ToInt(email.value) == 254, "a Field's kind by name and its length")
+    check(f64ToInt(f.children[1].step) == FIELD_NEW_PASSWORD && f64ToInt(f.children[1].value) == 256, "another kind, the default length")
+    check(f.children[1].style.get(P_FILL, ON_FOCUSED, 800.0, -1.0) == 0.0, "a Field takes style attributes, focused: too")
+    email.onText("po@example.com")
+    email.onPress()
+    check(demo.email == "po@example.com" && demo.log == "submit;", "a Field's onChange gets the text, onSubmit runs on Enter")
+    demo.log = ""
 
     // Custom tags: attributes by name, in any order; defaults; children by name.
     val cs = cards()

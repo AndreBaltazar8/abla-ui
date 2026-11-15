@@ -13,6 +13,7 @@ import "abla/text"
 //       <Toggle value={settings.shadows} onChange={ settings.shadows = value }>Shadows</Toggle>
 //       <Slider value={settings.volume} min=0 max=1 onChange={ settings.volume = value }/>
 //       <Button onPress={ reset() } tooltip="Back to the preset">Reset</Button>
+//       <Field value={form.name} hint="Your name" kind="text" max=32 onChange={ form.name = value } onSubmit={ save() }/>
 //     </Window>
 //
 // As in `$one`: attributes are style properties unless the element takes them as data
@@ -21,7 +22,8 @@ import "abla/text"
 // target (`forge:gap=8`, kept only where `uiTarget` is that target). Values: "text",
 // numbers, bare words, or {Abla expressions}. `on*={...}` handlers hold statements separated
 // by `;`; onChange receives `value` (a bool from a Toggle, a number from a Slider, an index
-// from Tabs). Capitalised tags that aren't built in call the function (or class) of that name
+// from Tabs, the text from a Field; a Field's kind is text, password, new-password, email,
+// number, search, username, chat, code or sign-in). Capitalised tags that aren't built in call the function (or class) of that name
 // with each attribute as the argument of that name, in any order, and the children (if any)
 // as `children`. Needs ablac 0.2.53 or newer (named arguments from a subparser). <If cond={...}>…</If> <Else>…</Else>
 // and <For each={xs} as="x">…</For> control what is rendered.
@@ -42,7 +44,7 @@ compile fun uiDslTextual(tag: string): bool =
     tag == "Text" || tag == "Label" || tag == "Caption" || tag == "Button" || tag == "Toggle"
 
 compile fun uiDslBuiltin(tag: string): bool =
-    uiDslContainer(tag) || uiDslTextual(tag) || tag == "Slider" || tag == "Tabs" || tag == "Image" ||
+    uiDslContainer(tag) || uiDslTextual(tag) || tag == "Slider" || tag == "Tabs" || tag == "Image" || tag == "Field" ||
     tag == "Spacer" || tag == "If" || tag == "Else" || tag == "For"
 
 // Attributes the element keeps as data (call arguments or element settings).
@@ -55,6 +57,7 @@ compile fun uiDslData(tag: string, name: string): bool {
         "Toggle" -> name == "value" || name == "checked" || name == "label" || name == "onChange"
         "Slider" -> name == "value" || name == "min" || name == "max" || name == "onChange"
         "Tabs" -> name == "labels" || name == "onChange"
+        "Field" -> name == "value" || name == "hint" || name == "kind" || name == "max" || name == "onChange" || name == "onSubmit"
         "Window" -> name == "title" || name == "onClose"
         "Image" -> name == "handle"
         else -> false
@@ -128,6 +131,9 @@ compile fun uiDslBuild(lang: TagLanguage, cursor: ParserCursor, tag: string, var
         "Slider" -> syntaxCall("slider", [uiDslNumber(a, "value", "0"), uiDslNumber(a, "min", "0"), uiDslNumber(a, "max", "1"), styled, uiDslHandler(a, "onChange", "uiNoNumber")])
         "Tabs" -> syntaxCall("tabs", [tagValue(a, "labels", syntaxArray([])), tagValue(a, "selected", syntaxInteger(0)), styled, uiDslHandler(a, "onChange", "uiNoInt")])
         "Image" -> syntaxCall("image", [tagValue(a, "handle", syntaxInteger(0)), styled])
+        "Field" -> syntaxCall("uiOnSubmit", [syntaxCall("textField", [tagValue(a, "value", syntaxString("")), tagText(lang, a, "hint", ""),
+            syntaxCall("uiFieldKindNamed", [tagText(lang, a, "kind", "text")]), syntaxCall("uiFieldMax", [uiDslNumber(a, "max", "256")]),
+            styled, uiDslHandler(a, "onChange", "uiNoText")]), uiDslHandler(a, "onSubmit", "uiNothing")])
         "Spacer" -> syntaxCall("spacer", [])
         else -> {
             // A program's own component: a function giving an element, or a class implementing

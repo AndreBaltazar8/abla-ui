@@ -462,7 +462,10 @@ class Theme(
     val scopes: Map<string, Theme> = Map(),
     // A window's close button (with its hover and pressed states).
     var close: Style = style().size(32.0, 32.0).align(FLEX_CENTER).justify(FLEX_CENTER).radius(6.0).color(0x9aa5b1, 1.0)
-        .hover(style().fill(0xffffff, 0.08).color(0xeef2f6, 1.0))
+        .hover(style().fill(0xffffff, 0.08).color(0xeef2f6, 1.0)),
+    // A text field's box (its colour is the text's), with hover and focused states.
+    var field: Style = style().height(40.0).paddingXY(12.0, 0.0).fill(0x0d1117, 1.0).border(1.0, 0x3d444d, 1.0).radius(6.0)
+        .color(0xeef2f6, 1.0).hover(style().border(1.0, 0x4aa3ff, 0.6)).focused(style().border(1.5, 0x4aa3ff, 1.0))
 )
 
 /** Name a style in this theme (a kind, a part, a variant). */

@@ -237,3 +237,25 @@ fun uiNoInt(v: int): void {
 fun uiNoNumber(v: f64): void {
     return
 }
+
+fun uiNoText(v: string): void {
+    return
+}
+
+fun uiOnSubmit(el: El, f: () -> void): El = el.onSubmit(f)
+
+fun uiFieldMax(v: f64): int = f64ToInt(v)
+
+/** A Field's `kind` attribute: FIELD_* by name (unknown: plain text). */
+fun uiFieldKindNamed(name: string): int = when (name) {
+    "password" -> FIELD_PASSWORD
+    "new-password" -> FIELD_NEW_PASSWORD
+    "email" -> FIELD_EMAIL
+    "number" -> FIELD_NUMBER
+    "search" -> FIELD_SEARCH
+    "username" -> FIELD_USERNAME
+    "chat" -> FIELD_CHAT
+    "code" -> FIELD_CODE
+    "sign-in" -> FIELD_SIGN_IN
+    else -> FIELD_TEXT
+}
