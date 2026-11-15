@@ -893,9 +893,43 @@ fun entering(): void {
     return
 }
 
+/** A box that goes from black to white on hover, easing over 100 ms (Style.transition). */
+class Fading() : Component {
+    fun render(): El = box(style().anchor(FLEX_ANCHOR_TOP_LEFT, 0.0, 0.0).size(100.0, 40.0).fill(0x000000, 1.0)
+        .hover(style().fill(0xffffff, 1.0)).transition(100.0), []).pressable(uiNothing).named("fading")
+}
+fun makeFading(): Component = Fading()
+
+fun transitioning(): void {
+    var t = viewTree(themeDefault(), Mono())
+    var r = recorder()
+    var e = viewInput()
+    e.time = 3.0
+    e.x = 500.0
+    e.y = 500.0
+    t.input(e)
+    val unused = t.mount(comp("fading", makeFading))
+    frame(t, e, r)
+    check(r.boxRgb.size > 0 && r.boxRgb[r.boxRgb.size - 1] == 0x000000, "before hover it paints its own fill")
+    e.x = 50.0
+    e.y = 20.0
+    frame(t, e, r)
+    clearRec(r)
+    e.time = 3.05
+    frame(t, e, r)
+    val mid = if (r.boxRgb.size > 0) r.boxRgb[r.boxRgb.size - 1] else -1
+    check(mid > 0x000000 && mid < 0xffffff && (mid & 255) > 0 && (mid & 255) < 255, "halfway through the transition it paints between the two (${mid})")
+    clearRec(r)
+    e.time = 3.3
+    frame(t, e, r)
+    check(r.boxRgb.size > 0 && r.boxRgb[r.boxRgb.size - 1] == 0xffffff, "after it, the hover fill")
+    return
+}
+
 fun main: int {
     counting()
     entering()
+    transitioning()
     settings()
     scrollingAndBreakpoints()
     fontsArrive()

@@ -84,7 +84,8 @@ val P_FX_A = 60
 val P_SOLID = 61        // 1: takes the pointer (a panel), so clicks don't reach the world
 val P_ENTER = 62        // ms: a new node fades in over this long (0: it appears at once)
 val P_ENTER_RISE = 63   // px: and rises this far into place while it does
-val P_COUNT = 64
+val P_TRANSITION = 64   // ms: a change of states (hover, pressed, selected…) eases into the new look
+val P_COUNT = 65
 val P_RAW = 100         // a raw (name, value) pair for one backend, e.g. "css:…"; its value indexes `raw`
 
 val SIZE_CONTENT = -1.0
@@ -278,6 +279,10 @@ fun Style.opacity(v: f64): Style = this.set(P_OPACITY, v)
 /** A node made new (not one kept by a render) fades in over `ms`, rising `rise` px into place,
  *  easing out; its children come with it. Nodes without it appear at once, as before. */
 fun Style.enter(ms: f64, rise: f64): Style = this.set(P_ENTER, ms).set(P_ENTER_RISE, rise)
+/** When the node's states change (hover, pressed, focused, selected, disabled), its colours,
+ *  alphas, border, glow, shadow and opacity ease into the new look over `ms` instead of
+ *  switching at once. Nodes without it switch at once, as before. */
+fun Style.transition(ms: f64): Style = this.set(P_TRANSITION, ms)
 fun Style.clip(): Style = this.set(P_CLIP, 1.0)
 fun Style.color(rgb: int, alpha: f64): Style = this.set(P_COLOR, f64FromInt(rgb)).set(P_COLOR_A, alpha)
 fun Style.textAlign(v: int): Style = this.set(P_TEXT_ALIGN, f64FromInt(v))
@@ -341,6 +346,51 @@ class Look(
     var opacity: f64, var clip: bool, var solid: bool,
     var color: int, var colorA: f64, var textAlign: int, var textFx: int, var fx: int, var fxA: f64
 )
+
+/** Every field of `from` into `into`. */
+fun lookCopy(from: Look, var into: Look): void {
+    into.fill = from.fill; into.fillA = from.fillA; into.fill2 = from.fill2; into.fill2A = from.fill2A; into.angle = from.angle
+    into.borderW = from.borderW; into.border = from.border; into.borderA = from.borderA
+    into.tl = from.tl; into.tr = from.tr; into.br = from.br; into.bl = from.bl; into.chamfer = from.chamfer
+    into.glowR = from.glowR; into.glow = from.glow; into.glowA = from.glowA
+    into.shadowBlur = from.shadowBlur; into.shadowY = from.shadowY; into.shadowA = from.shadowA
+    into.hatchA = from.hatchA; into.hatchP = from.hatchP
+    into.opacity = from.opacity; into.clip = from.clip; into.solid = from.solid
+    into.color = from.color; into.colorA = from.colorA; into.textAlign = from.textAlign; into.textFx = from.textFx; into.fx = from.fx; into.fxA = from.fxA
+    return
+}
+
+fun lookMix(a: f64, b: f64, k: f64): f64 = a + (b - a) * k
+
+/** 0xRRGGBB between `a` and `b`; a side with no alpha takes the other's colour (no tint through black). */
+fun lookMixRgb(a: int, aA: f64, b: int, bA: f64, k: f64): int {
+    if (aA <= 0.0) return b
+    if (bA <= 0.0) return a
+    var out = 0
+    var shift = 16
+    while (shift >= 0) {
+        val ca = (a >> shift) & 255
+        val cb = (b >> shift) & 255
+        out = out | (f64ToInt(f64FromInt(ca) + f64FromInt(cb - ca) * k + 0.5) << shift)
+        shift = shift - 8
+    }
+    out
+}
+
+/** `to` with its colours, alphas, border, glow, shadow and opacity taken `k` of the way from `from`. */
+fun lookBlend(from: Look, to: Look, k: f64, var into: Look): void {
+    lookCopy(to, into)
+    into.fill = lookMixRgb(from.fill, from.fillA, to.fill, to.fillA, k); into.fillA = lookMix(from.fillA, to.fillA, k)
+    into.fill2 = lookMixRgb(from.fill2, from.fill2A, to.fill2, to.fill2A, k); into.fill2A = lookMix(from.fill2A, to.fill2A, k)
+    into.borderW = lookMix(from.borderW, to.borderW, k)
+    into.border = lookMixRgb(from.border, from.borderA, to.border, to.borderA, k); into.borderA = lookMix(from.borderA, to.borderA, k)
+    into.glowR = lookMix(from.glowR, to.glowR, k)
+    into.glow = lookMixRgb(from.glow, from.glowA, to.glow, to.glowA, k); into.glowA = lookMix(from.glowA, to.glowA, k)
+    into.shadowBlur = lookMix(from.shadowBlur, to.shadowBlur, k); into.shadowY = lookMix(from.shadowY, to.shadowY, k); into.shadowA = lookMix(from.shadowA, to.shadowA, k)
+    into.opacity = lookMix(from.opacity, to.opacity, k)
+    into.color = lookMixRgb(from.color, from.colorA, to.color, to.colorA, k); into.colorA = lookMix(from.colorA, to.colorA, k)
+    return
+}
 
 fun look(): Look = Look(0, 0.0, 0, 0.0, 0.0, 0.0, 0, 0.0, 0.0, 0.0, 0.0, 0.0, false, 0.0, 0, 0.0, 0.0, 0.0, 0.0, 0.0, 6.0, 1.0, false, false, 0xffffff, 1.0, TEXT_LEFT, TEXT_FX_PLAIN, 0, 0.0)
 
