@@ -1,6 +1,7 @@
 import "abla/compiler/parser"
 import "./markup.ab"
 import "./grammar.ab"
+import "abla/text"
 
 // `$ui`: XML-like component syntax, the grammar abla-one's `$one` shares (src/grammar.ab),
 // compiling to abla-ui's elements, styles and kit. A template is one element. This file is

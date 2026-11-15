@@ -1,5 +1,6 @@
 import "abla/compiler/parser"
 import "abla/bytes"
+import "abla/text"
 
 // The tag grammar `$ui` (src/dsl.ab) and abla-one's `$one` share: XML-like elements with
 // attributes, `on*={ statements }` handlers, text content with {expressions}, children,
