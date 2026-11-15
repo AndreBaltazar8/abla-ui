@@ -233,6 +233,7 @@ class ViewTree(
     var hotSince: f64 = 0.0, var tipCandidate: int = -1, var tipNode: int = -1, var tipX: f64 = 0.0, var tipY: f64 = 0.0, var now: f64 = 0.0,
     var dragScroll: int = -1, var dragGrab: f64 = 0.0, var pressX: f64 = 0.0, var pressY: f64 = 0.0,
     var layouts: int = 0, var renders: int = 0, var resolves: int = 0,
+    var presses: int = 0,              // pressables activated so far (pointer or keyboard): an app's click sound can follow it
     val nameOf: array<string> = [],    // the name each node was given (`El.named`), "" for none
     // A component node's State scope (stateNewScope: unique across trees and never reused), -1
     // for none; and back from a scope to its node.

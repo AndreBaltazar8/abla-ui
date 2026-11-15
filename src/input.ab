@@ -176,7 +176,10 @@ fun ViewTree.input(e: ViewInput): void {
         if (was >= 0) {
             this.setOwn(was, ON_PRESSED, false)
             this.active = -1
-            if (e.released && was == hot && this.role[was] == ROLE_PRESS) this.press[was]()
+            if (e.released && was == hot && this.role[was] == ROLE_PRESS) {
+                this.presses = this.presses + 1
+                this.press[was]()
+            }
         }
         if (!e.down) {
             this.dragGrab = -1.0
@@ -205,7 +208,10 @@ fun ViewTree.input(e: ViewInput): void {
     val f = this.focused
     if (f >= 0 && step == 0) {
         val r = this.role[f]
-        if (e.activate && r == ROLE_PRESS) this.press[f]()
+        if (e.activate && r == ROLE_PRESS) {
+            this.presses = this.presses + 1
+            this.press[f]()
+        }
         if (r == ROLE_SLIDER) {
             val by = if (this.step[f] > 0.0) this.step[f] else (this.hi[f] - this.lo[f]) / 20.0
             if (e.left) this.slide(f, this.value[f] - by)

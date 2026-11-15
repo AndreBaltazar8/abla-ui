@@ -308,11 +308,13 @@ fun counting(): void {
     frame(t, e, r)
     e.pressed = false
     check((t.own[add] & ON_PRESSED) != 0 && model.count == 1, "pressed, not yet clicked")
+    val pressesBefore = t.presses
     e.down = false
     e.released = true
     frame(t, e, r)
     e.released = false
     check(model.count == 2, "released over it: clicked")
+    check(t.presses == pressesBefore + 1, "and the tree counts the activation (presses)")
     frame(t, e, r)
     check(said(r, "count 2") >= 0, "the click's State change shows next frame")
     e.x = -100.0
