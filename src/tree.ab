@@ -578,6 +578,10 @@ fun ViewTree.applyLayout(n: int): void {
     this.flex.setAlignSelf(n, f64ToInt(this.layoutProp(s, P_ALIGN_SELF, 0.0)))
     val sc = f64ToInt(this.layoutProp(s, P_SCROLL, 0.0))
     this.flex.setScroll(n, (sc & SCROLL_X) != 0, (sc & SCROLL_Y) != 0)
+    // A node that no longer scrolls on an axis (reused for another element, or restyled) keeps no
+    // offset there: its children would be drawn shifted by a scroller's old position.
+    if ((sc & SCROLL_X) == 0) this.sx[n] = 0.0
+    if ((sc & SCROLL_Y) == 0) this.sy[n] = 0.0
     val anchor = f64ToInt(this.layoutProp(s, P_ANCHOR, -1.0))
     if (anchor >= 0) this.flex.setAbsolute(n, anchor, this.layoutProp(s, P_OFF_X, 0.0), this.layoutProp(s, P_OFF_Y, 0.0))
     else this.flex.setFlag(n, FLEX_F_ABSOLUTE, false)

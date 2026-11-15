@@ -805,6 +805,37 @@ fun fieldsWork(): void {
     return
 }
 
+class ReuseModel(var open: bool by Tracked(true))
+val reuseModel = ReuseModel()
+class ReuseWindow() : Component {
+    fun render(): El {
+        val kids: array<El> = [text("Top", style())]
+        if (reuseModel.open) kids.append(list(style().height(60.0), [box(style().height(40.0), []), box(style().height(40.0), []), box(style().height(40.0), [])]).named("reuseList"))
+        kids.append(row(style().height(30.0), [text("After", style())]).named("after"))
+        column(style().width(200.0), kids)
+    }
+}
+fun makeReuseWindow(): Component = ReuseWindow()
+
+fun scrollerReused(): void {
+    val t = viewTree(themeDefault(), Mono())
+    t.mount(comp("reuse", makeReuseWindow))
+    t.update(800.0, 600.0)
+    val r = Recorder(0, 0, 0, [], [], [], [])
+    t.paint(r)
+    val l = t.named("reuseList")
+    t.scrollTo(l, 50.0)
+    check(t.sy[l] > 10.0, "the list scrolled (${t.sy[l]})")
+    reuseModel.open = false
+    t.update(800.0, 600.0)
+    t.paint(r)
+    val after = t.named("after")
+    var c = t.flex.first[after]
+    check(t.sy[after] == 0.0, "a node taken over from a scroller keeps no scroll offset (${t.sy[after]})")
+    check(c >= 0 && t.ay[c] >= t.ay[after], "so its children are drawn inside it (${t.ay[c]} vs ${t.ay[after]})")
+    return
+}
+
 fun main: int {
     counting()
     settings()
@@ -814,6 +845,7 @@ fun main: int {
     scopes()
     plain()
     fieldsWork()
+    scrollerReused()
     println("tree: $passed passed, $failed failed")
     if (failed == 0) 0 else 1
 }
