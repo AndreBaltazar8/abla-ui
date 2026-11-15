@@ -857,8 +857,43 @@ fun scrollerReused(): void {
     return
 }
 
+/** A panel that enters (Style.enter): it fades in and rises into place, then stays put. */
+class Entering() : Component {
+    fun render(): El = column(style().anchor(FLEX_ANCHOR_TOP_LEFT, 20.0, 20.0).enter(200.0, 10.0), [text("fade", style())])
+}
+fun makeEntering(): Component = Entering()
+
+fun entering(): void {
+    var t = viewTree(themeDefault(), Mono())
+    var r = recorder()
+    var e = viewInput()
+    e.time = 5.0
+    t.input(e) // the clock, as a frame's input sets it before anything new is made
+    val unused = t.mount(comp("entering", makeEntering))
+    frame(t, e, r)
+    check(said(r, "fade") < 0, "an entering node is invisible the frame it is made")
+    clearRec(r)
+    e.time = 5.1
+    frame(t, e, r)
+    val mid = said(r, "fade")
+    val midY = if (mid >= 0) r.textY[mid] else -1.0
+    check(mid >= 0 && midY > 20.0, "halfway it shows, still lowered (y $midY)")
+    clearRec(r)
+    e.time = 5.5
+    frame(t, e, r)
+    val done = said(r, "fade")
+    check(done >= 0 && near(r.textY[done], 20.0) && midY > r.textY[done], "after its time it sits in place (y ${if (done >= 0) r.textY[done] else -1.0})")
+    t.renders = 0
+    clearRec(r)
+    e.time = 9.0
+    frame(t, e, r)
+    check(t.renders == 0 && said(r, "fade") >= 0, "and entering costs no render")
+    return
+}
+
 fun main: int {
     counting()
+    entering()
     settings()
     scrollingAndBreakpoints()
     fontsArrive()

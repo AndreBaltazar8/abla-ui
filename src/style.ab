@@ -82,7 +82,9 @@ val P_TEXT_FX = 58      // TEXT_FX_PLAIN / TEXT_FX_SHADOWED / TEXT_FX_OUTLINED
 val P_FX = 59           // the shadow's or outline's colour
 val P_FX_A = 60
 val P_SOLID = 61        // 1: takes the pointer (a panel), so clicks don't reach the world
-val P_COUNT = 62
+val P_ENTER = 62        // ms: a new node fades in over this long (0: it appears at once)
+val P_ENTER_RISE = 63   // px: and rises this far into place while it does
+val P_COUNT = 64
 val P_RAW = 100         // a raw (name, value) pair for one backend, e.g. "css:…"; its value indexes `raw`
 
 val SIZE_CONTENT = -1.0
@@ -273,6 +275,9 @@ fun Style.glow(radius: f64, rgb: int, alpha: f64): Style = this.set(P_GLOW_R, ra
 fun Style.shadow(blur: f64, y: f64, alpha: f64): Style = this.set(P_SHADOW_BLUR, blur).set(P_SHADOW_Y, y).set(P_SHADOW_A, alpha)
 fun Style.hatch(alpha: f64, period: f64): Style = this.set(P_HATCH_A, alpha).set(P_HATCH_P, period)
 fun Style.opacity(v: f64): Style = this.set(P_OPACITY, v)
+/** A node made new (not one kept by a render) fades in over `ms`, rising `rise` px into place,
+ *  easing out; its children come with it. Nodes without it appear at once, as before. */
+fun Style.enter(ms: f64, rise: f64): Style = this.set(P_ENTER, ms).set(P_ENTER_RISE, rise)
 fun Style.clip(): Style = this.set(P_CLIP, 1.0)
 fun Style.color(rgb: int, alpha: f64): Style = this.set(P_COLOR, f64FromInt(rgb)).set(P_COLOR_A, alpha)
 fun Style.textAlign(v: int): Style = this.set(P_TEXT_ALIGN, f64FromInt(v))
