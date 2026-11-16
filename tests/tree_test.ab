@@ -203,6 +203,28 @@ fun clearRec(var r: Recorder): void {
     return
 }
 
+var relabelText = "Cancel"
+class Relabel(): Component {
+    fun render(): El = row(style(), [button(relabelText, style(), { -> }), text("Repair cost", style())])
+}
+fun makeRelabel(): Component = Relabel()
+
+/** A component re-rendered by useTheme (a new locale) shows its new strings. */
+fun relabel(): void {
+    var t = viewTree(themeDefault(), Mono())
+    var r = recorder()
+    var e = viewInput()
+    val unused = t.mount(comp("relabel", makeRelabel))
+    frame(t, e, r)
+    check(said(r, "Cancel") >= 0, "relabel: first text")
+    relabelText = "Abbrechen"
+    t.useTheme(themeDefault())
+    clearRec(r)
+    frame(t, e, r)
+    check(said(r, "Abbrechen") >= 0, "relabel: a re-render by useTheme shows the new label")
+    return
+}
+
 fun counting(): void {
     var t = viewTree(themeDefault(), Mono())
     var r = recorder()
@@ -970,6 +992,7 @@ fun exiting(): void {
 
 fun main: int {
     counting()
+    relabel()
     entering()
     transitioning()
     exiting()
