@@ -4,7 +4,6 @@
 
 import "abla/io"
 import "abla/float"
-import "abla/float/text"
 import "../src/ui.ab"
 
 var failed = 0

@@ -1,5 +1,4 @@
 import "abla/compiler/parser"
-import "./markup.ab"
 import "./grammar.ab"
 import "abla/text"
 

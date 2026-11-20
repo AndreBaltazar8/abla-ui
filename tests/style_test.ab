@@ -3,7 +3,6 @@
 // records and the same paint, call for call. Exits 0 when every check passes.
 
 import "abla/io"
-import "abla/float"
 import "abla/float/text"
 import "abla/math"
 import "../src/ui.ab"
