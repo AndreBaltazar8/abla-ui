@@ -4,7 +4,6 @@
 // ("#rgb", "#rrggbb", "#rrggbbaa", "@accent" from the theme) and lists of them.
 
 import "abla/float"
-import "abla/text"
 import "./flex.ab"
 import "./style.ab"
 import "./tree.ab"
