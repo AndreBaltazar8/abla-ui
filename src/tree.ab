@@ -123,7 +123,7 @@ fun comp(type: string, make: () -> Component): El =
 
 // Modifiers: each returns a new element.
 fun El.keyed(k: string): El = El(this.kind, k, this.style, this.text, this.children, this.role, this.value, this.lo, this.hi, this.step, this.selected, this.disabled, this.onPress, this.onValue, this.tooltip, this.image, this.type, this.make, this.name, this.onText, this.hint)
-fun El.styled(s: Style): El = El(this.kind, this.key, this.style.with(s), this.text, this.children, this.role, this.value, this.lo, this.hi, this.step, this.selected, this.disabled, this.onPress, this.onValue, this.tooltip, this.image, this.type, this.make, this.name, this.onText, this.hint)
+fun El.styled(s: Style): El = this.copy(style = this.style.with(s))
 /** Pressable: a click (released over it), Enter, Space or A while focused calls `f`. */
 fun El.pressable(f: () -> void): El = El(this.kind, this.key, this.style, this.text, this.children, ROLE_PRESS, this.value, this.lo, this.hi, this.step, this.selected, this.disabled, f, this.onValue, this.tooltip, this.image, this.type, this.make, this.name, this.onText, this.hint)
 /** A slider over [lo, hi] at `value`; `f` gets each new value (`step` 0: a twentieth of the range per key). */

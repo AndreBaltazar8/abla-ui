@@ -64,8 +64,7 @@ tree.paint(painter)      // ViewPainter: boxes, text runs, images, clips
 `$ui` is abla-one's `$one` syntax (its parser, ported): one element per template, attributes
 as style properties unless the element takes them as data, `state:` and `max760:` prefixes,
 `{expressions}`, `on*={ statements }` handlers (`onChange` receives `value`), `<If>` /
-`<Else>` / `<For>`, and capitalised tags calling a function of that name. The tag syntax
-(`dsl`) needs ablac 0.2.53 or newer; the rest of abla-ui builds with 0.2.48 and newer.
+`<Else>` / `<For>`, and capitalised tags calling a function of that name. Abla UI requires ablac 0.2.72 or newer.
 
 ```abla
 import github("AndreBaltazar8/abla-ui")
@@ -227,8 +226,7 @@ message invalid.
 
 `scripts/test.sh` builds and runs every `tests/*_test.ab` natively, and checks that every
 `tests/errors/*.ab` fails to build with the message its `// expect:` line names (`ABLAC` picks
-the compiler). abla-ui builds with ablac 0.2.48 and newer; the tag syntax (`src/dsl.ab`) needs
-0.2.53 or newer, and with an older compiler its checks are skipped.
+the compiler). Abla UI requires ablac 0.2.72 or newer.
 
 ## Before pushing main
 
@@ -236,8 +234,7 @@ abla-forge (the engine) and game-pandatrails build against abla-ui's main by sib
 (`../abla-ui`), so a push to main reaches them with no pin in between. Before pushing, run
 from each checkout and read each exit status:
 
-- `ABLAC=…/v0.2.48/installed/bin/ablac scripts/test.sh` and the same with 0.2.53 (abla-ui's
-  checks; the tag syntax's checks run only on 0.2.53);
+- `ABLAC=…/v0.2.72/installed/bin/ablac scripts/test.sh` (Abla UI’s checks);
 - `scripts/test.sh` in abla-forge (it runs abla-ui's checks again, then the engine's);
 - `game/scripts/build-client.sh` in game-pandatrails.
 
