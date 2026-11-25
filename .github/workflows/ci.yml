@@ -1,0 +1,23 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Pinned Abla release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: AndreBaltazar8/setup-abla@79a25cd8ad8ed3079678fefff33dbce6959b9734
+        with:
+          version: '0.2.73'
+      - name: Run UI contracts and compiler rejection tests
+        run: scripts/test.sh
